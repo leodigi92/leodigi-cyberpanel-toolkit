@@ -172,6 +172,22 @@ def remotes() -> list[str]:
     return [line.strip().rstrip(":") for line in output.splitlines() if rc == 0 and line.strip()]
 
 
+def schedules() -> list[tuple[str, str, str]]:
+    result = []
+    for timer in sorted(Path("/etc/systemd/system").glob("leodigi-cpt-backup-*.timer")):
+        profile = timer.stem.removeprefix("leodigi-cpt-backup-")
+        calendar = "unknown"
+        try:
+            for line in timer.read_text().splitlines():
+                if line.startswith("OnCalendar="):
+                    calendar = line.split("=", 1)[1]
+        except OSError:
+            pass
+        state = subprocess.run(["systemctl", "is-enabled", timer.stem], text=True, capture_output=True).stdout.strip()
+        result.append((profile, calendar, state or "disabled"))
+    return result
+
+
 def version() -> str:
     try:
         return Path("/opt/leodigi-cyberpanel-toolkit/VERSION").read_text().strip()
@@ -253,12 +269,47 @@ def backup_body(request: Request) -> str:
         actions = (action_form(request, "backup-list", "Xem snapshots", select) +
                    action_form(request, "backup-check", "Kiểm tra repository", select) +
                    action_form(request, "backup-run", "Chạy backup ngay", select, "good"))
-    rows = "".join(f"<tr><td>{html.escape(r)}</td><td><span class='badge ok'>connected</span></td></tr>" for r in remotes())
-    return f"""<div class="grid"><section class="card span8"><h2>Backup profiles</h2>
+    remote_list = remotes()
+    rows = "".join(f"<tr><td>{html.escape(r)}</td><td><span class='badge ok'>connected</span></td></tr>" for r in remote_list)
+    remote_options = "".join(f'<option value="{html.escape(r)}">{html.escape(r)}</option>' for r in remote_list)
+    schedule_rows = "".join(f'<tr><td>{html.escape(p)}</td><td>{html.escape(c)}</td><td><span class="badge ok">'
+                            f'{html.escape(s)}</span></td><td><form method="post" action="/action/backup-unschedule">'
+                            f'<input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" '
+                            f'name="profile" value="{html.escape(p)}"><button class="danger">Xóa lịch</button></form></td></tr>'
+                            for p, c, s in schedules())
+    configure = f"""<form method="post" action="/action/backup-configure" id="backup-config">
+<input type="hidden" name="csrf_token" value="{csrf(request)}"><div class="forms">
+<div><label>Tên cấu hình</label><input name="profile" value="production" required></div>
+<div><label>Tài khoản/Remote</label><select name="remote" id="remote" required>
+<option value="">Chọn remote...</option>{remote_options}</select></div>
+<div><label>Thư mục Google Drive</label><select id="drive-folders"><option>Chọn remote trước</option></select></div>
+<div><label>Đường dẫn đã chọn</label><input name="path" id="selected-path" value="" placeholder="Chọn thư mục" required></div>
+<div><label>Lưu backup cũ (ngày, 0 = không xóa)</label><input type="number" name="retention" value="30" min="0" max="99999" required></div>
+<div><label>Tần suất</label><select name="frequency"><option value="daily">Hàng ngày</option>
+<option value="twice-daily">2 lần/ngày</option><option value="weekly">Hàng tuần</option>
+<option value="monthly">Hàng tháng</option><option value="hourly">Mỗi giờ</option></select></div>
+<div><label>Giờ chạy</label><input type="time" name="at" value="02:30" required></div>
+<div><label><input type="checkbox" name="run_now" value="yes" checked style="min-width:auto"> Chạy backup ngay sau khi lưu</label></div>
+<button class="primary">Lưu cấu hình & lịch</button></div></form>
+<script>
+const remote=document.getElementById('remote'), folders=document.getElementById('drive-folders'), path=document.getElementById('selected-path');
+async function loadFolders(base=''){{folders.innerHTML='<option>Đang tải...</option>';
+ const q=new URLSearchParams({{remote:remote.value,path:base}}); const res=await fetch('/api/remote-dirs?'+q);
+ const data=await res.json(); folders.innerHTML='<option value="">Chọn thư mục...</option>';
+ for(const item of data.folders){{const o=document.createElement('option');o.value=item.endsWith('/')?item.slice(0,-1):item;o.textContent=item;folders.appendChild(o)}}
+}}
+remote.addEventListener('change',()=>{{path.value='';if(remote.value)loadFolders('')}});
+folders.addEventListener('change',()=>{{if(folders.value)path.value=folders.value}});
+</script>"""
+    return f"""<div class="grid"><section class="card span12"><h2>Cấu hình Google Drive Backup & Schedule</h2>
+<div class="notice">Chọn remote, chọn trực tiếp thư mục trên Drive, số ngày lưu và lịch chạy. Toolkit sẽ tạo Restic profile mã hóa.</div>
+{configure}</section><section class="card span8"><h2>Backup profiles</h2>
 <div class="notice">Restic mã hóa + Rclone cloud. Tác vụ run/check có thể chạy lâu.</div><div class="forms">{actions}</div>
 </section><section class="card span4"><h2>Cloud remotes</h2><table class="table"><thead><tr><th>Remote</th>
 <th>Trạng thái</th></tr></thead><tbody>{rows or '<tr><td colspan="2">Chưa có remote</td></tr>'}</tbody></table>
-</section></div>"""
+</section><section class="card span12"><h2>Lịch backup đang hoạt động</h2><table class="table"><thead>
+<tr><th>Profile</th><th>Lịch systemd</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>
+{schedule_rows or '<tr><td colspan="3">Chưa có lịch</td></tr>'}</tbody></table></section></div>"""
 
 
 READ_ACTIONS = {
@@ -343,11 +394,36 @@ def section_page(request: Request, section: str):
 
 @app.post("/action/{action}", response_class=HTMLResponse)
 def run_action(request: Request, action: str, csrf_token: str = Form(...),
-               profile: str = Form(""), target: str = Form("")):
+               profile: str = Form(""), target: str = Form(""), remote: str = Form(""),
+               path: str = Form(""), retention: str = Form("30"), frequency: str = Form("daily"),
+               at: str = Form("02:30"), run_now: str = Form("no")):
     require_auth(request)
     verify_csrf(request, csrf_token)
     timeout = 180
-    if action in READ_ACTIONS:
+    if action == "backup-configure":
+        profile, remote = valid_name(profile, "profile"), valid_name(remote, "remote")
+        if not path.strip() or "\n" in path or "\r" in path or ":" in path:
+            raise HTTPException(400, "Invalid Drive path")
+        if not retention.isdigit() or int(retention) > 99999:
+            raise HTTPException(400, "Invalid retention days")
+        if frequency not in {"hourly", "daily", "twice-daily", "weekly", "monthly"}:
+            raise HTTPException(400, "Invalid frequency")
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", at):
+            raise HTTPException(400, "Invalid schedule time")
+        outputs, rc = [], 0
+        for cmd_args, cmd_timeout in [
+            (["backup", "configure-noninteractive", profile, remote, path, retention], 60),
+            (["backup", "schedule", profile, frequency, at], 60),
+        ]:
+            code, text = command(cmd_args, cmd_timeout); outputs.append(text)
+            if code: rc = code; break
+        if rc == 0 and run_now == "yes":
+            rc, text = command(["backup", "run", profile], 3600); outputs.append(text)
+        args, output = ["backup", "configure", profile], "\n\n".join(outputs)
+    elif action == "backup-unschedule":
+        profile = valid_name(profile, "profile")
+        args = ["backup", "unschedule", profile]
+    elif action in READ_ACTIONS:
         args = READ_ACTIONS[action]
     elif action in {"backup-list", "backup-check", "backup-run"}:
         profile = valid_name(profile, "profile")
@@ -362,7 +438,8 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
         args = ["ssl", "check", valid_name(target, "domain")]
     else:
         raise HTTPException(404)
-    rc, output = command(args, timeout)
+    if action != "backup-configure":
+        rc, output = command(args, timeout)
     status = "Thành công" if rc == 0 else f"Lỗi (exit {rc})"
     body = (f'<div class="notice {"" if rc == 0 else "warn"}"><b>{html.escape(status)}</b> · '
             f'<code>{html.escape("toolkitctl " + " ".join(args))}</code></div><section class="card">'
@@ -379,6 +456,19 @@ def api_overview(request: Request):
                          "disk": {"total": disk.total, "used": disk.used,
                                   "percent": round(disk.used / disk.total * 100, 1)},
                          "load": os.getloadavg(), "services": dict(service_states()), "profiles": profiles()})
+
+
+@app.get("/api/remote-dirs")
+def api_remote_dirs(request: Request, remote: str, path: str = ""):
+    require_auth(request)
+    remote = valid_name(remote, "remote")
+    if "\n" in path or "\r" in path or ":" in path:
+        raise HTTPException(400, "Invalid path")
+    rc, output = command(["backup", "remote", "dirs", remote, path], 60)
+    if rc:
+        raise HTTPException(502, output)
+    return JSONResponse({"remote": remote, "path": path,
+                         "folders": [line.strip() for line in output.splitlines() if line.strip()]})
 
 
 @app.post("/logout")
