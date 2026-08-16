@@ -61,6 +61,7 @@ ensure_layout() {
   install -d -m 0750 "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "$BACKUP_DIR"
   install -d -m 0700 "$SECRETS_DIR"
   install -d -m 0750 "$STATE_DIR/reports" "$STATE_DIR/restore-points" "$STATE_DIR/jobs"
+  install -d -m 0750 "${RESTIC_CACHE_DIR:-/var/cache/leodigi-cyberpanel-toolkit}"
 }
 
 acquire_lock() {
