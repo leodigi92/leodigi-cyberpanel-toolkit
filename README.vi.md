@@ -6,7 +6,7 @@
 
 LeoDigi CyberPanel Toolkit là bộ công cụ quản trị mở rộng dành cho **CyberPanel Free + OpenLiteSpeed**. Toolkit hoạt động độc lập, không sửa mã nguồn lõi CyberPanel, nên hạn chế lỗi khi CyberPanel được cập nhật.
 
-> Phiên bản 1.3.1 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
+> Phiên bản 1.4.0 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
 
 ## 1. Chức năng
 
@@ -73,7 +73,7 @@ cd leodigi-cyberpanel-toolkit
 Nếu tải file ZIP:
 
 ```bash
-unzip leodigi-cyberpanel-toolkit-v1.3.1.zip
+unzip leodigi-cyberpanel-toolkit-v1.4.0.zip
 cd leodigi-cyberpanel-toolkit
 ```
 
@@ -86,7 +86,7 @@ bash tests/run.sh
 Kết quả đúng:
 
 ```text
-1.3.1
+1.4.0
 All tests passed
 ```
 
@@ -342,6 +342,15 @@ Mật khẩu Restic được tạo tại:
 ```
 
 Hãy lưu một bản mật khẩu này ở nơi an toàn khác. Mất mật khẩu đồng nghĩa không thể giải mã backup.
+
+Dashboard từ phiên bản 1.4 cho phép chọn phạm vi backup theo đúng website:
+
+- **Tất cả website và tất cả database:** backup toàn bộ `/home`, mọi database người dùng và cấu hình CyberPanel/OpenLiteSpeed.
+- **Website/database được chọn:** liệt kê website trong `/home`, tự đề xuất database WordPress từ `wp-config.php` và cho phép chọn database thủ công.
+- Mỗi snapshot chứa file website, dump database `.sql.gz` và manifest ghi rõ phạm vi đã chọn.
+- Snapshot được Restic mã hóa trước khi đồng bộ vào thư mục Rclone/Google Drive.
+
+Với chế độ chọn riêng, phải chọn ít nhất một website. Website tĩnh có thể không cần database; website động cần kiểm tra database được tự chọn đúng trước khi lưu lịch.
 
 ### Bước 4: Chạy backup đầu tiên
 
@@ -650,7 +659,7 @@ Tiếp theo mở firewall theo hướng dẫn ở mục 12 và chỉ cho phép I
 
 Từ phiên bản 1.1.0, installer có thể tự cấu hình bind, firewall và TLS bằng các tùy chọn `--dashboard-public`, `--dashboard-port`, `--dashboard-domain` và `--dashboard-https` ở mục 7.
 
-Dashboard 1.3.1 có giao diện quản trị responsive với:
+Dashboard 1.4.0 có giao diện quản trị responsive với:
 
 - Tổng quan CPU, RAM, ổ đĩa, uptime và trạng thái dịch vụ.
 - Backup profiles, cloud remotes, danh sách snapshot, integrity check và chạy backup.
@@ -702,7 +711,7 @@ Sau rollback, kiểm tra cú pháp và restart đúng dịch vụ liên quan.
 Update yêu cầu package `.tar.gz` và file `.sha256` tương ứng:
 
 ```bash
-sudo toolkitctl update /root/cyberpanel-toolkit-1.3.1.tar.gz
+sudo toolkitctl update /root/cyberpanel-toolkit-1.4.0.tar.gz
 ```
 
 Toolkit kiểm tra checksum, backup phiên bản cũ, cài phiên bản mới rồi chạy health check.

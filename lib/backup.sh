@@ -5,6 +5,8 @@ backup_help() {
   cat <<'EOF'
 toolkitctl backup configure
 toolkitctl backup configure-noninteractive PROFILE REMOTE PATH RETENTION_DAYS
+toolkitctl backup configure-selection PROFILE all|selected SITE_ROOTS DATABASES
+toolkitctl backup inventory
 toolkitctl backup remote add|list|test NAME
 toolkitctl backup remote dirs NAME [PATH]
 toolkitctl backup schedule PROFILE daily|twice-daily|weekly|monthly|hourly [HH:MM]
@@ -60,9 +62,74 @@ RESTIC_PASSWORD_FILE=$password_file
 RCLONE_CONFIG=$SECRETS_DIR/rclone.conf
 BACKUP_SOURCES=/home,/etc,/usr/local/lsws/conf,/usr/local/CyberCP
 BACKUP_RETENTION_DAYS=$retention
+BACKUP_SCOPE=all
+BACKUP_SITE_ROOTS=
+BACKUP_DATABASES=
 EOF
   chmod 0640 "$CONFIG_DIR/backup-${profile}.env"
   info "Profile saved: $profile. Run remote test, then initialize repository."
+}
+
+backup_configure_selection() {
+  require_root; ensure_layout
+  local profile="${1:?profile}" scope="${2:?scope}" roots="${3:-}" databases="${4:-}" file
+  [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid backup profile name"
+  [[ "$scope" == all || "$scope" == selected ]] || die "Backup scope must be all or selected"
+  file="$CONFIG_DIR/backup-${profile}.env"
+  [[ -f "$file" ]] || die "Backup profile not configured: $profile"
+  [[ "$roots" != *$'\n'* && "$roots" != *$'\r'* ]] || die "Invalid site roots"
+  [[ "$databases" != *$'\n'* && "$databases" != *$'\r'* ]] || die "Invalid databases"
+  local value root db normalized_roots="" normalized_databases=""
+  if [[ "$scope" == selected ]]; then
+    IFS=',' read -r -a values <<<"$roots"
+    for value in "${values[@]}"; do
+      root="${value%/}"
+      [[ "$root" =~ ^/home/[A-Za-z0-9._-]+(/public_html)?$ ]] || die "Invalid website root: $root"
+      [[ -d "$root" && ! -L "$root" ]] || die "Website root not found: $root"
+      normalized_roots+="${normalized_roots:+,}$root"
+    done
+    [[ -n "$normalized_roots" ]] || die "Select at least one website"
+    IFS=',' read -r -a values <<<"$databases"
+    for value in "${values[@]}"; do
+      db="$value"
+      [[ "$db" =~ ^[A-Za-z0-9_$-]{1,64}$ ]] || die "Invalid database: $db"
+      normalized_databases+="${normalized_databases:+,}$db"
+    done
+  fi
+  sed -i '/^BACKUP_SCOPE=/d;/^BACKUP_SITE_ROOTS=/d;/^BACKUP_DATABASES=/d' "$file"
+  cat >>"$file" <<EOF
+BACKUP_SCOPE=$scope
+BACKUP_SITE_ROOTS=$normalized_roots
+BACKUP_DATABASES=$normalized_databases
+EOF
+  info "Backup selection saved: profile=$profile scope=$scope sites=${normalized_roots:-all} databases=${normalized_databases:-all}"
+}
+
+backup_inventory() {
+  require_root
+  local first=1 domain root owner db wp
+  printf '{"sites":['
+  for root in /home/*/public_html; do
+    [[ -d "$root" && ! -L "$root" ]] || continue
+    domain="$(basename "$(dirname "$root")")"
+    [[ "$domain" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    owner="$(stat -c '%U' "$root" 2>/dev/null || printf unknown)"
+    db=""
+    wp="$root/wp-config.php"
+    if [[ -r "$wp" ]]; then
+      db="$(sed -nE "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_NAME['\"][[:space:]]*,[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" "$wp" | head -n1)"
+      [[ "$db" =~ ^[A-Za-z0-9_$-]{1,64}$ ]] || db=""
+    fi
+    ((first)) || printf ','; first=0
+    printf '{"domain":"%s","owner":"%s","root":"%s","suggested_database":"%s"}' "$domain" "$owner" "$root" "$db"
+  done
+  printf '],"databases":['; first=1
+  while IFS= read -r db; do
+    [[ "$db" =~ ^[A-Za-z0-9_$-]{1,64}$ ]] || continue
+    case "$db" in information_schema|performance_schema|mysql|sys) continue ;; esac
+    ((first)) || printf ','; first=0; printf '"%s"' "$db"
+  done < <(mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true)
+  printf ']}\n'
 }
 
 backup_remote() {
@@ -105,14 +172,14 @@ backup_load_profile() {
 }
 
 backup_dump_databases() {
-  local dump_dir="$1" db
+  local dump_dir="$1" selection="${2:-}" db
   install -d -m 0700 "$dump_dir"
   command -v mariadb >/dev/null || return 0
   while IFS= read -r db; do
     [[ -n "$db" && "$db" != information_schema && "$db" != performance_schema && "$db" != mysql && "$db" != sys ]] || continue
     info "Dumping database: $db"
     mariadb-dump --single-transaction --routines --events --triggers --databases "$db" | gzip -c >"$dump_dir/$db.sql.gz"
-  done < <(mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true)
+  done < <(if [[ -n "$selection" ]]; then tr ',' '\n' <<<"$selection"; else mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true; fi)
 }
 
 backup_run() {
@@ -121,13 +188,21 @@ backup_run() {
   backup_load_profile "$profile"
   install -d -m 0700 "$stage/database"
   trap 'rm -rf "$stage"' RETURN
-  backup_dump_databases "$stage/database"
-  printf '{"run_id":"%s","hostname":"%s","created":"%s"}\n' "$RUN_ID" "$(hostname -f)" "$(date -u +%FT%TZ)" >"$stage/manifest.json"
+  local scope="${BACKUP_SCOPE:-all}" selected_databases="${BACKUP_DATABASES:-}"
+  backup_dump_databases "$stage/database" "$([[ "$scope" == selected ]] && printf %s "$selected_databases")"
+  printf '{"run_id":"%s","hostname":"%s","created":"%s","scope":"%s","site_roots":"%s","databases":"%s"}\n' \
+    "$RUN_ID" "$(hostname -f)" "$(date -u +%FT%TZ)" "$scope" "${BACKUP_SITE_ROOTS:-all}" "${BACKUP_DATABASES:-all}" >"$stage/manifest.json"
   if ! restic snapshots --json >/dev/null 2>&1; then
     info "Initializing encrypted repository"
     restic init
   fi
-  IFS=',' read -r -a sources <<<"${BACKUP_SOURCES:-/home,/etc}"
+  if [[ "$scope" == selected ]]; then
+    [[ -n "${BACKUP_SITE_ROOTS:-}" ]] || die "Selected backup has no website roots"
+    IFS=',' read -r -a sources <<<"$BACKUP_SITE_ROOTS"
+    sources+=(/etc /usr/local/lsws/conf /usr/local/CyberCP)
+  else
+    IFS=',' read -r -a sources <<<"${BACKUP_SOURCES:-/home,/etc}"
+  fi
   restic backup "${sources[@]}" "$stage" --tag "profile:$profile" --tag cyberpanel --host "$(hostname -s)" --exclude-caches
   if [[ -n "${BACKUP_RETENTION_DAYS:-}" ]]; then
     if ((BACKUP_RETENTION_DAYS > 0)); then restic forget --prune --keep-within "${BACKUP_RETENTION_DAYS}d"; fi

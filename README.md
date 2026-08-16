@@ -6,7 +6,7 @@
 
 Production-oriented, modular operations toolkit for **CyberPanel Free + OpenLiteSpeed**. It adds encrypted cloud backup, WordPress staging/clone helpers, malware scanning, firewall guardrails, mail diagnostics/Rspamd, wildcard SSL automation, monitoring and a local-only dashboard without modifying CyberPanel core.
 
-> Version 1.3.1 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
+> Version 1.4.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
 
 ## Features
 
@@ -139,6 +139,8 @@ sudo toolkitctl backup restore production SNAPSHOT_ID /restore/cyberpanel-test
 
 Database dumps are restored as files and are never automatically imported over a live database.
 
+Since v1.4 the Dashboard supports full-server or per-site backup scopes. It inventories CyberPanel document roots, suggests WordPress databases from `wp-config.php`, allows explicit database selection, and stores website files, compressed SQL dumps, configuration and a selection manifest in the encrypted Restic snapshot before Rclone uploads it.
+
 ## WordPress
 
 Create both source and destination websites/database assignments in CyberPanel first:
@@ -151,7 +153,7 @@ sudo toolkitctl wp clone example.com staging.example.com
 sudo toolkitctl wp staging example.com staging.example.com
 ```
 
-Clone/staging creates a Restic backup first. Production push is intentionally not exposed in v1.3.1 because file/database merge policy is application-specific; use a reviewed clone workflow or restore point.
+Clone/staging creates a Restic backup first. Production push is intentionally not exposed in v1.4.0 because file/database merge policy is application-specific; use a reviewed clone workflow or restore point.
 
 ## Malware and firewall
 
@@ -222,7 +224,7 @@ sudo toolkitctl dashboard reset-password
 sudo toolkitctl dashboard status
 ```
 
-Version 1.3.1 provides a responsive operations UI with system metrics, service health, backup profiles/remotes,
+Version 1.4.0 provides a responsive operations UI with system metrics, service health, backup profiles/remotes,
 Google Drive folder selection, retention in days, hourly/daily/weekly/monthly scheduling, snapshot listing,
 repository checks, backup execution, WordPress health, malware scanning, mail/SSL/monitoring/firewall diagnostics
 and recent logs. Session authentication, CSRF protection and strict CLI argument allowlists are enforced.
@@ -233,7 +235,7 @@ Destructive restore, firewall mutation, malware deletion and WordPress cloning r
 Versioned updates require a tarball and adjacent SHA-256 file:
 
 ```bash
-sudo toolkitctl update /root/cyberpanel-toolkit-1.3.1.tar.gz
+sudo toolkitctl update /root/cyberpanel-toolkit-1.4.0.tar.gz
 sudo toolkitctl restore-points
 sudo toolkitctl rollback RESTORE_POINT_ID
 sudo toolkitctl uninstall

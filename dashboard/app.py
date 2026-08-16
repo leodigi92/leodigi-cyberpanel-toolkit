@@ -84,6 +84,10 @@ font:12px/1.6 Consolas,monospace}.quick{display:grid;grid-template-columns:repea
 background:#0b192b;border:1px solid #213b5c;border-radius:9px;padding:13px;color:#dbeafe;text-decoration:none}
 .quick a:hover{border-color:var(--brand)}.quick small{display:block;color:var(--muted);margin-top:5px}.footer{
 color:#637995;text-align:center;margin-top:28px;font-size:12px}
+.selector{max-height:260px;overflow:auto;background:#081426;border:1px solid #2d4668;border-radius:9px;padding:10px;
+min-width:360px}.checkrow{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:7px;
+border-bottom:1px solid #172a44}.checkrow input{min-width:auto}.checkrow small{color:var(--muted)}.scope{display:flex;gap:16px;
+padding:9px 0}.scope label{color:var(--text);font-size:13px}.scope input{min-width:auto}
 @media(max-width:1000px){.layout{display:block}.sidebar{position:static;width:auto}.nav{display:flex;overflow:auto}
 .nav a{white-space:nowrap}.side-foot{display:none}.main{padding:20px}.span3,.span4{grid-column:span 6}}
 @media(max-width:650px){.span3,.span4,.span6,.span8{grid-column:span 12}.status-list,.quick{grid-template-columns:1fr}}
@@ -175,6 +179,14 @@ def remotes() -> list[str]:
 
 
 def site_inventory() -> list[dict[str, str]]:
+    rc, output = command(["backup", "inventory"], 30)
+    if rc == 0:
+        try:
+            data = json.loads(output)
+            if isinstance(data.get("sites"), list):
+                return sorted(data["sites"], key=lambda x: (str(x.get("owner", "")), str(x.get("domain", ""))))
+        except (ValueError, AttributeError):
+            pass
     if shutil.which("malwarectl"):
         try:
             result = subprocess.run(["malwarectl", "sites"], text=True, capture_output=True, timeout=30)
@@ -200,6 +212,19 @@ def site_inventory() -> list[dict[str, str]]:
     return sorted(result, key=lambda x: (x["owner"], x["domain"]))
 
 
+def backup_inventory() -> tuple[list[dict[str, str]], list[str]]:
+    rc, output = command(["backup", "inventory"], 30)
+    if rc == 0:
+        try:
+            data = json.loads(output)
+            sites, databases = data.get("sites", []), data.get("databases", [])
+            if isinstance(sites, list) and isinstance(databases, list):
+                return sites, [str(x) for x in databases if SAFE_NAME.fullmatch(str(x))]
+        except (ValueError, AttributeError):
+            pass
+    return site_inventory(), []
+
+
 def profile_details() -> list[dict[str, str]]:
     details = []
     for profile in profiles():
@@ -211,8 +236,13 @@ def profile_details() -> list[dict[str, str]]:
                     values[key] = value
         except OSError:
             pass
+        roots = [x for x in values.get("BACKUP_SITE_ROOTS", "").split(",") if x]
+        databases = [x for x in values.get("BACKUP_DATABASES", "").split(",") if x]
+        scope = values.get("BACKUP_SCOPE", "all")
         details.append({"profile": profile, "repository": values.get("RESTIC_REPOSITORY", "unknown"),
-                        "retention": values.get("BACKUP_RETENTION_DAYS", "policy")})
+                        "retention": values.get("BACKUP_RETENTION_DAYS", "policy"),
+                        "selection": "Tất cả website + database" if scope == "all"
+                        else f"{len(roots)} website · {len(databases)} database"})
     return details
 
 
@@ -227,8 +257,9 @@ def schedules() -> list[tuple[str, str, str, str]]:
                     calendar = line.split("=", 1)[1]
         except OSError:
             pass
-        state = subprocess.run(["systemctl", "is-enabled", timer.stem], text=True, capture_output=True).stdout.strip()
-        show = subprocess.run(["systemctl", "show", timer.stem, "-p", "NextElapseUSecRealtime", "--value"],
+        unit = timer.name
+        state = subprocess.run(["systemctl", "is-enabled", unit], text=True, capture_output=True).stdout.strip()
+        show = subprocess.run(["systemctl", "show", unit, "-p", "NextElapseUSecRealtime", "--value"],
                               text=True, capture_output=True).stdout.strip()
         result.append((profile, calendar, state or "disabled", show or "-"))
     return result
@@ -318,13 +349,23 @@ def backup_body(request: Request) -> str:
     remote_list = remotes()
     rows = "".join(f"<tr><td>{html.escape(r)}</td><td><span class='badge ok'>connected</span></td></tr>" for r in remote_list)
     remote_options = "".join(f'<option value="{html.escape(r)}">{html.escape(r)}</option>' for r in remote_list)
+    sites, databases = backup_inventory()
+    site_checks = "".join(
+        f'<label class="checkrow"><input type="checkbox" name="site_roots" value="{html.escape(str(x.get("root", "")))}" '
+        f'data-db="{html.escape(str(x.get("suggested_database", "")))}"><span><b>{html.escape(str(x.get("domain", "")))}</b>'
+        f'<small> · {html.escape(str(x.get("owner", "")))}</small></span><small>{html.escape(str(x.get("root", "")))}</small></label>'
+        for x in sites)
+    db_checks = "".join(
+        f'<label class="checkrow"><input type="checkbox" name="databases" value="{html.escape(db)}" data-db-name="{html.escape(db)}">'
+        f'<span>{html.escape(db)}</span><small>MariaDB</small></label>' for db in databases)
     schedule_rows = "".join(f'<tr><td>{html.escape(p)}</td><td>{html.escape(c)}</td><td><span class="badge ok">'
                             f'{html.escape(s)}</span></td><td><form method="post" action="/action/backup-unschedule">'
                             f'<input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" '
                             f'name="profile" value="{html.escape(p)}"><button class="danger">Xóa lịch</button></form></td>'
                             f'<td>{html.escape(n)}</td></tr>' for p, c, s, n in schedules())
     profile_rows = "".join(f'<tr><td><b>{html.escape(x["profile"])}</b></td><td>{html.escape(x["repository"])}</td>'
-                           f'<td>{html.escape(x["retention"])} ngày</td><td><span class="badge ok">Đã cấu hình</span></td></tr>'
+                           f'<td>{html.escape(x["selection"])}</td><td>{html.escape(x["retention"])} ngày</td>'
+                           f'<td><span class="badge ok">Đã cấu hình</span></td></tr>'
                            for x in profile_details())
     configure = f"""<form method="post" action="/action/backup-configure" id="backup-config">
 <input type="hidden" name="csrf_token" value="{csrf(request)}"><div class="forms">
@@ -339,7 +380,15 @@ def backup_body(request: Request) -> str:
 <option value="monthly">Hàng tháng</option><option value="hourly">Mỗi giờ</option></select></div>
 <div><label>Giờ chạy</label><input type="time" name="at" value="02:30" required></div>
 <div><label><input type="checkbox" name="run_now" value="yes" checked style="min-width:auto"> Chạy backup ngay sau khi lưu</label></div>
-<button class="primary">Lưu cấu hình & lịch</button></div></form>
+<button class="primary">Lưu cấu hình & lịch</button></div>
+<div class="scope"><label><input type="radio" name="scope" value="all" checked> Tất cả website và tất cả database</label>
+<label><input type="radio" name="scope" value="selected"> Chỉ các website/database được chọn</label></div>
+<div class="grid"><div class="span6"><label>Website ({len(sites)}) · chọn một hoặc nhiều</label>
+<div class="selector"><label class="checkrow"><input type="checkbox" id="all-sites"><b>Chọn/bỏ chọn tất cả website</b></label>
+{site_checks or '<div class="empty">Không tìm thấy website trong /home</div>'}</div></div>
+<div class="span6"><label>Database ({len(databases)}) · tự đề xuất theo wp-config.php và có thể chọn thêm</label>
+<div class="selector"><label class="checkrow"><input type="checkbox" id="all-databases"><b>Chọn/bỏ chọn tất cả database</b></label>
+{db_checks or '<div class="empty">Không đọc được danh sách MariaDB</div>'}</div></div></div></form>
 <script>
 const remote=document.getElementById('remote'), folders=document.getElementById('drive-folders'), path=document.getElementById('selected-path');
 async function loadFolders(base=''){{folders.innerHTML='<option>Đang tải...</option>';
@@ -349,13 +398,17 @@ async function loadFolders(base=''){{folders.innerHTML='<option>Đang tải...</
 }}
 remote.addEventListener('change',()=>{{path.value='';if(remote.value)loadFolders('')}});
 folders.addEventListener('change',()=>{{if(folders.value)path.value=folders.value}});
+const siteBoxes=[...document.querySelectorAll('input[name="site_roots"]')],dbBoxes=[...document.querySelectorAll('input[name="databases"]')];
+document.getElementById('all-sites').addEventListener('change',e=>siteBoxes.forEach(x=>x.checked=e.target.checked));
+document.getElementById('all-databases').addEventListener('change',e=>dbBoxes.forEach(x=>x.checked=e.target.checked));
+siteBoxes.forEach(x=>x.addEventListener('change',()=>{{if(x.checked&&x.dataset.db){{const db=dbBoxes.find(d=>d.dataset.dbName===x.dataset.db);if(db)db.checked=true}}}}));
 </script>"""
     return f"""<div class="grid"><section class="card span12"><h2>Cấu hình Google Drive Backup & Schedule</h2>
 <div class="notice">Chọn remote, chọn trực tiếp thư mục trên Drive, số ngày lưu và lịch chạy. Toolkit sẽ tạo Restic profile mã hóa.</div>
 {configure}</section><section class="card span8"><h2>Backup profiles</h2>
 <div class="notice">Restic mã hóa + Rclone cloud. Tác vụ run/check có thể chạy lâu.</div>
-<table class="table"><thead><tr><th>Profile</th><th>Repository</th><th>Retention</th><th>Trạng thái</th></tr></thead>
-<tbody>{profile_rows or '<tr><td colspan="4">Chưa có profile</td></tr>'}</tbody></table><div class="forms">{actions}</div>
+<table class="table"><thead><tr><th>Profile</th><th>Repository</th><th>Phạm vi</th><th>Retention</th><th>Trạng thái</th></tr></thead>
+<tbody>{profile_rows or '<tr><td colspan="5">Chưa có profile</td></tr>'}</tbody></table><div class="forms">{actions}</div>
 </section><section class="card span4"><h2>Cloud remotes</h2><table class="table"><thead><tr><th>Remote</th>
 <th>Trạng thái</th></tr></thead><tbody>{rows or '<tr><td colspan="2">Chưa có remote</td></tr>'}</tbody></table>
 </section><section class="card span12"><h2>Lịch backup đang hoạt động</h2><table class="table"><thead>
@@ -463,7 +516,8 @@ def section_page(request: Request, section: str):
 def run_action(request: Request, action: str, csrf_token: str = Form(...),
                profile: str = Form(""), target: str = Form(""), remote: str = Form(""),
                path: str = Form(""), retention: str = Form("30"), frequency: str = Form("daily"),
-               at: str = Form("02:30"), run_now: str = Form("no")):
+               at: str = Form("02:30"), run_now: str = Form("no"), scope: str = Form("all"),
+               site_roots: list[str] = Form([]), databases: list[str] = Form([])):
     require_auth(request)
     verify_csrf(request, csrf_token)
     timeout = 180
@@ -477,9 +531,18 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
             raise HTTPException(400, "Invalid frequency")
         if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", at):
             raise HTTPException(400, "Invalid schedule time")
+        if scope not in {"all", "selected"}:
+            raise HTTPException(400, "Invalid backup scope")
+        if scope == "selected" and not site_roots:
+            raise HTTPException(400, "Hãy chọn ít nhất một website")
+        inventory_sites, inventory_databases = backup_inventory()
+        allowed_roots = {str(x.get("root", "")) for x in inventory_sites}
+        if any(root not in allowed_roots for root in site_roots) or any(db not in set(inventory_databases) for db in databases):
+            raise HTTPException(400, "Website hoặc database không hợp lệ")
         outputs, rc = [], 0
         for cmd_args, cmd_timeout in [
             (["backup", "configure-noninteractive", profile, remote, path, retention], 60),
+            (["backup", "configure-selection", profile, scope, ",".join(site_roots), ",".join(databases)], 60),
             (["backup", "schedule", profile, frequency, at], 60),
         ]:
             code, text = command(cmd_args, cmd_timeout); outputs.append(text)
