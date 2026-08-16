@@ -388,14 +388,92 @@ sudo toolkitctl firewall apply --apply
 sudo toolkitctl firewall status
 ```
 
-Mở/đóng cổng riêng:
+### Mở cổng trên giao diện CyberPanel
+
+Đăng nhập CyberPanel bằng tài khoản quản trị, mở **Security > Firewall** hoặc **Firewall Management**. Trong phần **Firewall Rules**, điền:
+
+| Trường | Giá trị ví dụ | Giải thích |
+|---|---|---|
+| Rule Name | `toolkit-dashboard` | Tên dễ nhận biết |
+| Protocol | `TCP` | Dashboard và dịch vụ web dùng TCP |
+| IP Address | `IP_QUAN_TRI/32` | Khuyến nghị chỉ cho phép IP công cộng của quản trị viên |
+| Port | `9443` | Cổng Dashboard mặc định |
+
+Nhấn **Add Rule**, sau đó **Reload** firewall nếu giao diện yêu cầu. Không dùng `0.0.0.0/0` trừ khi thật sự muốn cho toàn Internet truy cập cổng đó.
+
+Ví dụ chỉ cho IP `203.0.113.10` truy cập:
+
+```text
+Rule Name: toolkit-dashboard
+Protocol: TCP
+IP Address: 203.0.113.10/32
+Port: 9443
+```
+
+Nếu nhà cung cấp VPS có **Cloud Firewall**, **Security Group** hoặc **Network ACL**, cần tạo rule TCP tương tự ở trang quản trị của nhà cung cấp. Firewall trong CyberPanel không thể vượt qua rule đang chặn ở lớp cloud.
+
+### Mở cổng qua SSH
+
+Kiểm tra cổng SSH thực tế trước khi bật firewall và luôn giữ một phiên SSH thứ hai đang mở:
+
+```bash
+sudo ss -lntp | grep -E ':(22|9443)\b'
+sudo toolkitctl firewall status
+```
+
+Mở cổng bằng Toolkit:
 
 ```bash
 sudo toolkitctl firewall open 9443/tcp --apply
+sudo toolkitctl firewall status
+```
+
+Lệnh trên có thể cho phép mọi nguồn tùy backend firewall. Với Ubuntu/UFW, an toàn hơn là chỉ cho IP quản trị:
+
+```bash
+sudo ufw allow from IP_QUAN_TRI to any port 9443 proto tcp comment 'LeoDigi Toolkit Dashboard'
+sudo ufw status numbered
+```
+
+Với firewalld, tạo rich rule giới hạn IP:
+
+```bash
+sudo firewall-cmd --permanent \
+  --add-rich-rule='rule family="ipv4" source address="IP_QUAN_TRI/32" port protocol="tcp" port="9443" accept'
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-all
+```
+
+Đóng cổng đã mở bằng Toolkit:
+
+```bash
 sudo toolkitctl firewall close 9443/tcp --apply
 ```
 
-Không mở cổng 7080 hoặc Dashboard công khai nếu không giới hạn IP.
+Nếu đã tạo rule UFW giới hạn IP, xóa đúng rule bằng:
+
+```bash
+sudo ufw status numbered
+sudo ufw delete SO_THU_TU_RULE
+```
+
+### Kiểm tra sau khi mở cổng
+
+```bash
+sudo ss -lntp | grep ':9443'
+sudo systemctl status leodigi-cpt-dashboard --no-pager
+curl -I http://127.0.0.1:9443/
+```
+
+Từ máy quản trị có thể kiểm tra bằng PowerShell:
+
+```powershell
+Test-NetConnection IP_VPS -Port 9443
+```
+
+Google Drive/Rclone **không yêu cầu mở cổng inbound**. Backup cloud chỉ cần kết nối outbound HTTPS TCP 443, mặc định firewall cho phép. Cổng `9443` chỉ liên quan đến Dashboard.
+
+Không mở cổng `7080` hoặc Dashboard công khai nếu không giới hạn IP.
 
 ## 13. Mail và Rspamd
 
@@ -500,7 +578,29 @@ Dashboard mặc định chỉ nghe tại:
 127.0.0.1:9443
 ```
 
-Không truy cập trực tiếp từ Internet. Hãy tạo subdomain HTTPS trong OpenLiteSpeed rồi reverse proxy tới `127.0.0.1:9443`, kết hợp giới hạn IP hoặc VPN.
+Với cấu hình này, không cần mở cổng `9443` để dùng reverse proxy. Hãy tạo subdomain HTTPS trong OpenLiteSpeed rồi reverse proxy tới `127.0.0.1:9443`, kết hợp giới hạn IP hoặc VPN.
+
+Nếu cần truy cập trực tiếp qua cổng `9443` trong mạng riêng/VPN, sửa:
+
+```bash
+sudo nano /etc/leodigi-cyberpanel-toolkit/toolkit.env
+```
+
+Đặt:
+
+```text
+DASHBOARD_BIND=0.0.0.0
+DASHBOARD_PORT=9443
+```
+
+Sau đó:
+
+```bash
+sudo systemctl restart leodigi-cpt-dashboard
+sudo ss -lntp | grep ':9443'
+```
+
+Tiếp theo mở firewall theo hướng dẫn ở mục 12 và chỉ cho phép IP quản trị hoặc dải mạng VPN. Truy cập trực tiếp `http://IP_VPS:9443` không có TLS ở lớp Uvicorn; không nên dùng qua Internet công cộng vì thông tin đăng nhập có thể đi qua kết nối không mã hóa. Phương án production được khuyến nghị là subdomain HTTPS reverse proxy.
 
 Dashboard chỉ cung cấp hành động đọc/kiểm tra. Những thao tác xóa, restore, firewall hoặc clone website vẫn phải dùng CLI và xác nhận.
 
