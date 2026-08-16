@@ -6,7 +6,7 @@
 
 Production-oriented, modular operations toolkit for **CyberPanel Free + OpenLiteSpeed**. It adds encrypted cloud backup, WordPress staging/clone helpers, malware scanning, firewall guardrails, mail diagnostics/Rspamd, wildcard SSL automation, monitoring and a local-only dashboard without modifying CyberPanel core.
 
-> Version 1.1.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
+> Version 1.2.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
 
 ## Features
 
@@ -151,7 +151,7 @@ sudo toolkitctl wp clone example.com staging.example.com
 sudo toolkitctl wp staging example.com staging.example.com
 ```
 
-Clone/staging creates a Restic backup first. Production push is intentionally not exposed in v1.1.0 because file/database merge policy is application-specific; use a reviewed clone workflow or restore point.
+Clone/staging creates a Restic backup first. Production push is intentionally not exposed in v1.2.0 because file/database merge policy is application-specific; use a reviewed clone workflow or restore point.
 
 ## Malware and firewall
 
@@ -222,14 +222,17 @@ sudo toolkitctl dashboard reset-password
 sudo toolkitctl dashboard status
 ```
 
-The service listens on `127.0.0.1:9443`. Publish it only through an HTTPS OpenLiteSpeed reverse proxy with an additional IP allowlist or VPN. The dashboard intentionally cannot run restore, firewall mutation, malware deletion or WordPress clone.
+Version 1.2.0 provides a responsive operations UI with system metrics, service health, backup profiles/remotes,
+snapshot listing, repository checks, backup execution, WordPress health, malware scanning, mail/SSL/monitoring/
+firewall diagnostics and recent logs. Session authentication, CSRF protection and strict CLI argument allowlists
+are enforced. Destructive restore, firewall mutation, malware deletion and WordPress cloning remain CLI-only.
 
 ## Update, rollback and removal
 
 Versioned updates require a tarball and adjacent SHA-256 file:
 
 ```bash
-sudo toolkitctl update /root/cyberpanel-toolkit-1.1.0.tar.gz
+sudo toolkitctl update /root/cyberpanel-toolkit-1.2.0.tar.gz
 sudo toolkitctl restore-points
 sudo toolkitctl rollback RESTORE_POINT_ID
 sudo toolkitctl uninstall
