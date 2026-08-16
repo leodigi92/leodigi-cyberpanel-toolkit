@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Backup CLI contract v1.5.1: keep Dashboard actions and toolkitctl dispatch in sync.
+
 backup_help() {
   cat <<'EOF'
 toolkitctl backup configure
