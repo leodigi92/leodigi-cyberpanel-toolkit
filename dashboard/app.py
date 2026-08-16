@@ -244,6 +244,7 @@ def profile_details() -> list[dict[str, str]]:
         databases = [x for x in values.get("BACKUP_DATABASES", "").split(",") if x]
         scope = values.get("BACKUP_SCOPE", "all")
         details.append({"profile": profile, "repository": values.get("RESTIC_REPOSITORY", "unknown"),
+                        "format": values.get("BACKUP_FORMAT", "restic"),
                         "retention": values.get("BACKUP_RETENTION_DAYS", "policy"),
                         "selection": "Tất cả website + database" if scope == "all"
                         else f"{len(roots)} website · {len(databases)} database"})
@@ -367,11 +368,12 @@ def backup_body(request: Request) -> str:
                             f'<input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" '
                             f'name="profile" value="{html.escape(p)}"><button class="danger">Xóa lịch</button></form></td>'
                             f'<td>{html.escape(n)}</td></tr>' for p, c, s, n in schedules())
-    profile_rows = "".join(f'<tr><td><b>{html.escape(x["profile"])}</b></td><td>{html.escape(x["repository"])}</td>'
+    profile_rows = "".join(f'<tr><td><b>{html.escape(x["profile"])}</b></td><td>{html.escape(x["format"].upper())}</td><td>{html.escape(x["repository"])}</td>'
                            f'<td>{html.escape(x["selection"])}</td><td>{html.escape(x["retention"])} ngày</td>'
                            f'<td><span class="badge ok">Đã cấu hình</span></td></tr>'
                            for x in profile_details())
-    monitor_options = "".join(f'<option value="{html.escape(p)}">{html.escape(p)}</option>' for p in available)
+    profile_formats = {x["profile"]: x["format"] for x in profile_details()}
+    monitor_options = "".join(f'<option value="{html.escape(p)}" data-format="{html.escape(profile_formats.get(p, "restic"))}">{html.escape(p)}</option>' for p in available)
     export_dir = STATE_DIR / "exports"
     export_links = "".join(
         f'<a class="btn" href="/download/{html.escape(p.name)}">{html.escape(p.name)} · {human_bytes(p.stat().st_size)}</a>'
@@ -385,6 +387,8 @@ def backup_body(request: Request) -> str:
 <div><label>Thư mục Google Drive</label><select id="drive-folders"><option>Chọn remote trước</option></select></div>
 <div><label>Đường dẫn đã chọn</label><input name="path" id="selected-path" value="" placeholder="Chọn thư mục" required></div>
 <div><label>Lưu backup cũ (ngày, 0 = không xóa)</label><input type="number" name="retention" value="30" min="0" max="99999" required></div>
+<div><label>Định dạng backup</label><select name="backup_format"><option value="archive" selected>ZIP website + SQL.GZ database</option>
+<option value="restic">Restic repository (nâng cao)</option></select></div>
 <div><label>Tần suất</label><select name="frequency"><option value="daily">Hàng ngày</option>
 <option value="twice-daily">2 lần/ngày</option><option value="weekly">Hàng tuần</option>
 <option value="monthly">Hàng tháng</option><option value="hourly">Mỗi giờ</option></select></div>
@@ -424,7 +428,7 @@ siteBoxes.forEach(x=>x.addEventListener('change',()=>{{if(x.checked&&x.dataset.d
 <div class="monitor-item"><small>Tốc độ trung bình</small><b id="job-speed">0 B/s</b></div>
 <div class="monitor-item"><small>Còn lại dự kiến</small><b id="job-eta">-</b></div></div>
 <p class="subtitle" id="job-message">Dashboard tự cập nhật mỗi 2 giây.</p>
-<h2>Snapshots & khôi phục</h2><div id="snapshot-area" class="empty">Bấm “Tải danh sách snapshot”.</div>
+<h2>Phiên bản backup trên cloud</h2><div id="snapshot-area" class="empty">Bấm “Tải danh sách snapshot”.</div>
 <h2 style="margin-top:18px">Gói tải xuống đã tạo</h2><div class="forms">{export_links or '<span class="subtitle">Chưa có gói tải xuống.</span>'}</div>
 </section><script>
 const mp=document.getElementById('monitor-profile'),bar=document.getElementById('backup-progress');
@@ -441,15 +445,16 @@ async function pollJob(){{if(!mp||!mp.value)return;try{{const r=await fetch('/ap
 async function snapshots(){{const area=document.getElementById('snapshot-area');area.textContent='Đang tải...';
  const r=await fetch('/api/backup-snapshots?profile='+encodeURIComponent(mp.value)),d=await r.json();if(!r.ok){{area.textContent=d.detail||'Lỗi';return}}
  if(!d.snapshots.length){{area.textContent='Chưa có snapshot hoàn chỉnh.';return}}let h='<table class="table"><thead><tr><th>ID</th><th>Thời gian</th><th>Host</th><th>Paths</th><th>Khôi phục/Tải</th></tr></thead><tbody>';
- for(const s of d.snapshots){{const id=s.short_id||s.id;h+='<tr><td><code>'+esc(id)+'</code></td><td>'+esc(s.time)+'</td><td>'+esc(s.hostname||'')+'</td><td>'+esc((s.paths||[]).join(', '))+'</td><td><form method="post" action="/action/backup-export"><input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" name="profile" value="'+esc(mp.value)+'"><input type="hidden" name="snapshot" value="'+esc(id)+'"><button>Tạo gói tải xuống</button></form></td></tr>'}}area.innerHTML=h+'</tbody></table>'}}
+ const archive=mp.options[mp.selectedIndex]?.dataset.format==='archive';
+ for(const s of d.snapshots){{const id=s.short_id||s.id;h+='<tr><td><code>'+esc(id)+'</code></td><td>'+esc(s.time)+'</td><td>'+esc(s.hostname||'')+'</td><td>'+esc((s.paths||[]).join(', '))+'</td><td>'+(archive?'Có thể tải trực tiếp trên Drive':'<form method="post" action="/action/backup-export"><input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" name="profile" value="'+esc(mp.value)+'"><input type="hidden" name="snapshot" value="'+esc(id)+'"><button>Tạo gói tải xuống</button></form>')+'</td></tr>'}}area.innerHTML=h+'</tbody></table>'}}
 document.getElementById('load-snapshots').addEventListener('click',snapshots);mp&&mp.addEventListener('change',pollJob);setInterval(pollJob,2000);pollJob();
 </script>"""
     return f"""<div class="grid"><section class="card span12"><h2>Cấu hình Google Drive Backup & Schedule</h2>
-<div class="notice">Chọn remote, chọn trực tiếp thư mục trên Drive, số ngày lưu và lịch chạy. Toolkit sẽ tạo Restic profile mã hóa.</div>
+<div class="notice">Mặc định: nén từng website thành ZIP, xuất từng database thành SQL.GZ, tải lên Drive và tự dọn file tạm local sau khi upload thành công.</div>
 {configure}</section><section class="card span8"><h2>Backup profiles</h2>
-<div class="notice">Restic mã hóa + Rclone cloud. Tác vụ run/check có thể chạy lâu.</div>
-<table class="table"><thead><tr><th>Profile</th><th>Repository</th><th>Phạm vi</th><th>Retention</th><th>Trạng thái</th></tr></thead>
-<tbody>{profile_rows or '<tr><td colspan="5">Chưa có profile</td></tr>'}</tbody></table><div class="forms">{actions}</div>
+<div class="notice">Archive dễ tải/khôi phục trực tiếp; Restic vẫn được giữ cho profile cũ và nhu cầu snapshot mã hóa.</div>
+<table class="table"><thead><tr><th>Profile</th><th>Định dạng</th><th>Repository</th><th>Phạm vi</th><th>Retention</th><th>Trạng thái</th></tr></thead>
+<tbody>{profile_rows or '<tr><td colspan="6">Chưa có profile</td></tr>'}</tbody></table><div class="forms">{actions}</div>
 </section><section class="card span4"><h2>Cloud remotes</h2><table class="table"><thead><tr><th>Remote</th>
 <th>Trạng thái</th></tr></thead><tbody>{rows or '<tr><td colspan="2">Chưa có remote</td></tr>'}</tbody></table>
 </section>{monitor}<section class="card span12"><h2>Lịch backup đang hoạt động</h2><table class="table"><thead>
@@ -558,6 +563,7 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
                profile: str = Form(""), target: str = Form(""), remote: str = Form(""),
                path: str = Form(""), retention: str = Form("30"), frequency: str = Form("daily"),
                at: str = Form("02:30"), run_now: str = Form("no"), scope: str = Form("all"),
+               backup_format: str = Form("archive"),
                site_roots: list[str] = Form([]), databases: list[str] = Form([]), snapshot: str = Form("")):
     require_auth(request)
     verify_csrf(request, csrf_token)
@@ -574,6 +580,8 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
             raise HTTPException(400, "Invalid schedule time")
         if scope not in {"all", "selected"}:
             raise HTTPException(400, "Invalid backup scope")
+        if backup_format not in {"archive", "restic"}:
+            raise HTTPException(400, "Invalid backup format")
         if scope == "selected" and not site_roots:
             raise HTTPException(400, "Hãy chọn ít nhất một website")
         inventory_sites, inventory_databases = backup_inventory()
@@ -582,7 +590,7 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
             raise HTTPException(400, "Website hoặc database không hợp lệ")
         outputs, rc = [], 0
         for cmd_args, cmd_timeout in [
-            (["backup", "configure-noninteractive", profile, remote, path, retention], 60),
+            (["backup", "configure-noninteractive", profile, remote, path, retention, backup_format], 60),
             (["backup", "configure-selection", profile, scope, ",".join(site_roots), ",".join(databases)], 60),
             (["backup", "schedule", profile, frequency, at], 60),
         ]:

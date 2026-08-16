@@ -6,7 +6,7 @@
 
 LeoDigi CyberPanel Toolkit là bộ công cụ quản trị mở rộng dành cho **CyberPanel Free + OpenLiteSpeed**. Toolkit hoạt động độc lập, không sửa mã nguồn lõi CyberPanel, nên hạn chế lỗi khi CyberPanel được cập nhật.
 
-> Phiên bản 1.5.1 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
+> Phiên bản 1.6.0 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
 
 ## 1. Chức năng
 
@@ -366,6 +366,23 @@ sudo toolkitctl backup snapshots-json production
 Trong Dashboard, bấm **Tải danh sách snapshot**, chọn snapshot rồi bấm **Tạo gói tải xuống**. Toolkit khôi phục snapshot vào vùng tạm, đóng gói `.tar.gz` trong `/var/lib/leodigi-cyberpanel-toolkit/exports` và chỉ cho người đã đăng nhập Dashboard tải xuống. Liên kết/gói export hết hạn sau 24 giờ. Gói khôi phục không tự ghi đè website/database đang chạy.
 
 Gói snapshot có thể rất lớn và tạm thời cần thêm dung lượng ổ đĩa. Sau khi tải xong, quản trị viên nên xóa gói không còn cần thiết khỏi thư mục `exports`.
+
+### Backup ZIP + SQL trực tiếp lên Drive (v1.6)
+
+Dashboard mặc định tạo profile `archive`: mỗi website được nén thành một file `.zip`, mỗi database được xuất thành `.sql.gz`, sau đó tải trực tiếp bằng Rclone vào `archives/HOST/PROFILE/THỜI_GIAN`. File checksum SHA-256 được tải kèm từng artifact. Marker `_SUCCESS` chỉ xuất hiện khi toàn bộ phiên backup hoàn tất.
+
+Sau khi một artifact và checksum tải thành công, bản tạm local được xóa ngay để giảm dung lượng VPS. Nếu job lỗi, phần staging chưa tải xong được giữ trong `/var/lib/leodigi-cyberpanel-toolkit/jobs` để điều tra. Retention chỉ xóa dữ liệu cũ trong nhánh `archives`, không tác động repository Restic cũ.
+
+```text
+archives/vps-01/production/2026-08-17_03-30-00/
+├── websites/example.com.zip
+├── websites/example.com.zip.sha256
+├── databases/example_db.sql.gz
+├── databases/example_db.sql.gz.sha256
+├── manifest.json
+├── manifest.json.sha256
+└── _SUCCESS
+```
 
 ### Bước 4: Chạy backup đầu tiên
 

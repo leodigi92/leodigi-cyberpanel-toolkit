@@ -9,7 +9,7 @@ python3 -m py_compile "$ROOT/dashboard/app.py"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 CPT_CONFIG="$tmp/missing.env" TOOLKIT_ROOT="$ROOT" "$ROOT/toolkitctl" version | grep -Fx "$(<"$ROOT/VERSION")"
 CPT_CONFIG="$tmp/missing.env" TOOLKIT_ROOT="$ROOT" "$ROOT/toolkitctl" help | grep -q 'CyberPanel Toolkit'
-for function in backup_inventory backup_remote backup_schedule backup_unschedule backup_start backup_cancel backup_status backup_snapshots_json backup_export backup_export_start; do
+for function in backup_inventory backup_remote backup_schedule backup_unschedule backup_start backup_cancel backup_status backup_snapshots_json backup_archives_json backup_export backup_export_start; do
   grep -q "^${function}()" "$ROOT/lib/backup.sh" || { echo "MISSING backup action: $function"; fail=1; }
 done
 if grep -RIE '(ghp_[A-Za-z0-9]{20,}|github_pat_|AKIA[0-9A-Z]{16}|client_secret[[:space:]]*=[[:space:]]*[^<])' "$ROOT" --exclude-dir=.git --exclude=run.sh; then

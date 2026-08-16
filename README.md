@@ -6,7 +6,7 @@
 
 Production-oriented, modular operations toolkit for **CyberPanel Free + OpenLiteSpeed**. It adds encrypted cloud backup, WordPress staging/clone helpers, malware scanning, firewall guardrails, mail diagnostics/Rspamd, wildcard SSL automation, monitoring and a local-only dashboard without modifying CyberPanel core.
 
-> Version 1.5.1 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
+> Version 1.6.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
 
 ## Features
 
@@ -142,6 +142,8 @@ Database dumps are restored as files and are never automatically imported over a
 Since v1.4 the Dashboard supports full-server or per-site backup scopes. It inventories CyberPanel document roots, suggests WordPress databases from `wp-config.php`, allows explicit database selection, and stores website files, compressed SQL dumps, configuration and a selection manifest in the encrypted Restic snapshot before Rclone uploads it.
 
 Version 1.5 adds background systemd jobs, a polling Backup Monitor with Restic JSON progress, safe cancellation, snapshot browsing, server-side restore/export and authenticated `.tar.gz` downloads. Exports are restored to an isolated state directory and never overwrite a live website or database.
+
+Version 1.6 adds human-readable archive backups as the Dashboard default. Every website is uploaded as an individual `.zip`, every MariaDB database as `.sql.gz`, with SHA-256 sidecars, a manifest and a final `_SUCCESS` marker. Local artifacts are removed only after successful Rclone upload, while incomplete staging is retained for diagnosis. Remote retention is isolated under the `archives/` subtree and cannot prune an existing Restic repository.
 
 ## WordPress
 

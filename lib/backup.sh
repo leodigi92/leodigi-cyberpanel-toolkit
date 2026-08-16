@@ -6,7 +6,7 @@ set -Eeuo pipefail
 backup_help() {
   cat <<'EOF'
 toolkitctl backup configure
-toolkitctl backup configure-noninteractive PROFILE REMOTE PATH RETENTION_DAYS
+toolkitctl backup configure-noninteractive PROFILE REMOTE PATH RETENTION_DAYS [archive|restic]
 toolkitctl backup configure-selection PROFILE all|selected SITE_ROOTS DATABASES
 toolkitctl backup inventory
 toolkitctl backup remote add|list|test NAME
@@ -17,6 +17,7 @@ toolkitctl backup run [PROFILE]
 toolkitctl backup start|cancel|status [PROFILE]
 toolkitctl backup list [PROFILE]
 toolkitctl backup snapshots-json [PROFILE]
+toolkitctl backup archives-json [PROFILE]
 toolkitctl backup check [PROFILE]
 toolkitctl backup restore PROFILE SNAPSHOT TARGET
 toolkitctl backup export PROFILE SNAPSHOT
@@ -26,7 +27,7 @@ EOF
 
 backup_install() {
   require_root
-  package_install restic rclone mariadb-client 2>/dev/null || package_install restic rclone mariadb
+  package_install restic rclone zip mariadb-client 2>/dev/null || package_install restic rclone zip mariadb
   install -D -m 0644 "$TOOLKIT_ROOT/systemd/leodigi-cpt-backup.service" /etc/systemd/system/leodigi-cpt-backup.service
   install -D -m 0644 "$TOOLKIT_ROOT/systemd/leodigi-cpt-backup.timer" /etc/systemd/system/leodigi-cpt-backup.timer
   run systemctl daemon-reload
@@ -36,21 +37,23 @@ backup_install() {
 
 backup_configure() {
   require_root; ensure_layout
-  local profile remote path retention
+  local profile remote path retention format
   read -r -p "Profile name [production]: " profile; profile=${profile:-production}
   read -r -p "Rclone remote name or backend URL: " remote
   read -r -p "Repository path [CyberPanel-Backups/$(hostname -s)]: " path; path=${path:-CyberPanel-Backups/$(hostname -s)}
   read -r -p "Retention days, 0 = unlimited [30]: " retention; retention=${retention:-30}
-  backup_configure_noninteractive "$profile" "$remote" "$path" "$retention"
+  read -r -p "Backup format, archive or restic [archive]: " format; format=${format:-archive}
+  backup_configure_noninteractive "$profile" "$remote" "$path" "$retention" "$format"
 }
 
 backup_configure_noninteractive() {
   require_root; ensure_layout
-  local profile="${1:?profile}" remote="${2:?remote}" path="${3:?path}" retention="${4:-30}" password_file
+  local profile="${1:?profile}" remote="${2:?remote}" path="${3:?path}" retention="${4:-30}" format="${5:-archive}" password_file
   [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid backup profile name"
   [[ "$remote" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || die "Invalid Rclone remote name"
   [[ "$retention" =~ ^[0-9]{1,5}$ ]] || die "Retention days must be 0-99999"
   ((retention <= 99999)) || die "Retention days must be 0-99999"
+  [[ "$format" == archive || "$format" == restic ]] || die "Backup format must be archive or restic"
   [[ -n "$path" && "$path" != *$'\n'* && "$path" != *$'\r'* && "$path" != *:* ]] || die "Invalid repository path"
   path="${path#/}"; path="${path%/}"
   password_file="$SECRETS_DIR/restic-${profile}.password"
@@ -63,6 +66,9 @@ backup_configure_noninteractive() {
   if [[ "$remote" == *:* ]]; then repository="$remote/$path"; else repository="rclone:${remote}:${path}"; fi
   cat >"$CONFIG_DIR/backup-${profile}.env" <<EOF
 BACKUP_PROFILE=$profile
+BACKUP_FORMAT=$format
+BACKUP_REMOTE=$remote
+BACKUP_REMOTE_PATH=$path
 RESTIC_REPOSITORY=$repository
 RESTIC_PASSWORD_FILE=$password_file
 RCLONE_CONFIG=$SECRETS_DIR/rclone.conf
@@ -73,7 +79,7 @@ BACKUP_SITE_ROOTS=
 BACKUP_DATABASES=
 EOF
   chmod 0640 "$CONFIG_DIR/backup-${profile}.env"
-  info "Profile saved: $profile. Run remote test, then initialize repository."
+  info "Profile saved: $profile format=$format. Run remote test before the first backup."
 }
 
 backup_configure_selection() {
@@ -173,8 +179,11 @@ backup_load_profile() {
   file="$CONFIG_DIR/backup-${profile}.env"
   [[ -r "$file" ]] || die "Backup profile not configured: $profile"
   source "$file"
-  export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RCLONE_CONFIG RESTIC_CACHE_DIR
-  [[ -s "$RESTIC_PASSWORD_FILE" ]] || die "Restic password file missing"
+  BACKUP_FORMAT="${BACKUP_FORMAT:-restic}"
+  export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RCLONE_CONFIG RESTIC_CACHE_DIR BACKUP_FORMAT BACKUP_REMOTE BACKUP_REMOTE_PATH
+  if [[ "$BACKUP_FORMAT" == restic ]]; then
+    [[ -s "$RESTIC_PASSWORD_FILE" ]] || die "Restic password file missing"
+  fi
 }
 
 backup_mariadb() {
@@ -223,10 +232,96 @@ backup_dump_databases() {
   done < <(if [[ -n "$selection" ]]; then tr ',' '\n' <<<"$selection"; else backup_mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true; fi)
 }
 
-backup_run() {
-  require_root; acquire_lock
+backup_archive_progress() {
+  local progress="$1" done="$2" total="$3" bytes="$4" current="${5:-}" percent
+  percent="$(awk -v done="$done" -v total="$total" 'BEGIN { if (total < 1) print 0; else printf "%.6f", done / total }')"
+  printf '{"message_type":"status","percent_done":%s,"files_done":%s,"total_files":%s,"bytes_done":%s,"current_files":["%s"]}\n' \
+    "$percent" "$done" "$total" "$bytes" "${current//\"/}" >>"$progress"
+}
+
+backup_archive_upload() {
+  local local_file="$1" remote_file="$2" bytes
+  bytes="$(stat -c '%s' "$local_file")"
+  sha256sum "$local_file" >"${local_file}.sha256"
+  rclone copyto "$local_file" "$remote_file" --config "$RCLONE_CONFIG" --retries 3 --low-level-retries 10
+  rclone copyto "${local_file}.sha256" "${remote_file}.sha256" --config "$RCLONE_CONFIG" --retries 3 --low-level-retries 10
+  rm -f "$local_file" "${local_file}.sha256"
+  printf '%s' "$bytes"
+}
+
+backup_run_archive() {
+  local profile="$1" stage="$STATE_DIR/jobs/archive-$RUN_ID" job_dir progress scope selected_databases
+  local remote path archive_root batch remote_batch root name artifact db item_bytes total_bytes=0 done=0 total=1 success=no
+  local -a site_roots databases
+  job_dir="$(backup_job_dir)"; install -d -m 0750 "$job_dir"
+  progress="$job_dir/${profile}.progress.ndjson"; : >"$progress"
+  install -d -m 0700 "$stage/websites" "$stage/databases"
+  trap 'rc=$?; if [[ "$success" == yes ]]; then rm -rf "$stage"; else backup_job_state "$profile" failed failed "Archive backup thất bại; dữ liệu tạm còn tại $stage"; fi; exit "$rc"' EXIT
+  remote="${BACKUP_REMOTE:-}"; path="${BACKUP_REMOTE_PATH:-}"
+  if [[ -z "$remote" && "${RESTIC_REPOSITORY:-}" == rclone:* ]]; then
+    remote="${RESTIC_REPOSITORY#rclone:}"; path="${remote#*:}"; remote="${remote%%:*}"
+  fi
+  [[ "$remote" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || die "Archive profile has no valid Rclone remote"
+  path="${path#/}"; path="${path%/}"
+  archive_root="${path:+$path/}archives/$(hostname -s)/$profile"
+  batch="$(date -u +%Y-%m-%d_%H-%M-%S)-${RUN_ID##*-}"
+  remote_batch="${remote}:${archive_root}/${batch}"
+  scope="${BACKUP_SCOPE:-all}"; selected_databases="${BACKUP_DATABASES:-}"
+  if [[ "$scope" == selected ]]; then
+    IFS=',' read -r -a site_roots <<<"${BACKUP_SITE_ROOTS:-}"
+    IFS=',' read -r -a databases <<<"$selected_databases"
+  else
+    for root in /home/*/public_html; do [[ -d "$root" && ! -L "$root" ]] && site_roots+=("$root"); done
+    while IFS= read -r db; do
+      case "$db" in ""|information_schema|performance_schema|mysql|sys) continue ;; esac
+      databases+=("$db")
+    done < <(backup_mariadb --batch --skip-column-names -e 'SHOW DATABASES')
+  fi
+  total=$((${#site_roots[@]} + ${#databases[@]} + 1))
+  backup_job_state "$profile" running archive "Đang nén website thành ZIP"
+  backup_archive_progress "$progress" 0 "$total" 0 "preparing"
+  for root in "${site_roots[@]}"; do
+    [[ -d "$root" && ! -L "$root" ]] || die "Website root not found: $root"
+    name="$(basename "$(dirname "$root")")"; [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid website name: $name"
+    artifact="$stage/websites/${name}.zip"
+    backup_job_state "$profile" running archive "Đang nén website: $name"
+    (cd "$root" && zip -q -r -y "$artifact" .)
+    backup_job_state "$profile" running upload "Đang tải website lên Drive: ${name}.zip"
+    item_bytes="$(backup_archive_upload "$artifact" "$remote_batch/websites/${name}.zip")"
+    total_bytes=$((total_bytes + item_bytes)); done=$((done + 1))
+    backup_archive_progress "$progress" "$done" "$total" "$total_bytes" "websites/${name}.zip"
+  done
+  for db in "${databases[@]}"; do
+    [[ "$db" =~ ^[A-Za-z0-9_$-]{1,64}$ ]] || die "Invalid database: $db"
+    artifact="$stage/databases/${db}.sql.gz"
+    backup_job_state "$profile" running database "Đang xuất database: $db"
+    backup_mariadb_dump --single-transaction --routines --events --triggers --databases "$db" | gzip -c >"$artifact"
+    backup_job_state "$profile" running upload "Đang tải database lên Drive: ${db}.sql.gz"
+    item_bytes="$(backup_archive_upload "$artifact" "$remote_batch/databases/${db}.sql.gz")"
+    total_bytes=$((total_bytes + item_bytes)); done=$((done + 1))
+    backup_archive_progress "$progress" "$done" "$total" "$total_bytes" "databases/${db}.sql.gz"
+  done
+  printf '{"profile":"%s","format":"archive","hostname":"%s","created":"%s","scope":"%s","websites":%s,"databases":%s}\n' \
+    "$profile" "$(hostname -f)" "$(date -u +%FT%TZ)" "$scope" "${#site_roots[@]}" "${#databases[@]}" >"$stage/manifest.json"
+  item_bytes="$(backup_archive_upload "$stage/manifest.json" "$remote_batch/manifest.json")"
+  total_bytes=$((total_bytes + item_bytes)); done=$((done + 1))
+  printf '%s\n' "completed $(date -u +%FT%TZ)" >"$stage/_SUCCESS"
+  rclone copyto "$stage/_SUCCESS" "$remote_batch/_SUCCESS" --config "$RCLONE_CONFIG" --retries 3
+  rm -f "$stage/_SUCCESS"
+  backup_archive_progress "$progress" "$done" "$total" "$total_bytes" "_SUCCESS"
+  if [[ "${BACKUP_RETENTION_DAYS:-0}" =~ ^[0-9]+$ ]] && ((BACKUP_RETENTION_DAYS > 0)); then
+    backup_job_state "$profile" running retention "Đang dọn archive cũ trên Drive"
+    rclone delete "${remote}:${archive_root}" --config "$RCLONE_CONFIG" --min-age "${BACKUP_RETENTION_DAYS}d" --retries 3
+    rclone rmdirs "${remote}:${archive_root}" --config "$RCLONE_CONFIG" --leave-root 2>/dev/null || true
+  fi
+  printf '%s\n' "$(date -u +%FT%TZ) profile=$profile format=archive status=PASS remote=$remote_batch" >"$STATE_DIR/last-backup"
+  backup_job_state "$profile" completed completed "Backup ZIP + SQL hoàn tất: $remote_batch"
+  success=yes
+  info "Archive backup completed: $remote_batch"
+}
+
+backup_run_restic() {
   local profile="${1:-production}" stage="$STATE_DIR/jobs/backup-$RUN_ID" job_dir progress rc=0
-  backup_load_profile "$profile"
   job_dir="$(backup_job_dir)"; install -d -m 0750 "$job_dir"
   progress="$job_dir/${profile}.progress.ndjson"; : >"$progress"
   backup_job_state "$profile" running preparing "Đang chuẩn bị backup"
@@ -266,9 +361,58 @@ backup_run() {
   info "Backup completed: $profile"
 }
 
-backup_list() { backup_load_profile "${1:-production}"; restic snapshots; }
-backup_snapshots_json() { backup_load_profile "${1:-production}"; restic snapshots --json 2>/dev/null; }
-backup_check() { backup_load_profile "${1:-production}"; restic check --read-data-subset="${RESTIC_CHECK_SUBSET:-5%}"; }
+backup_run() {
+  require_root; acquire_lock
+  local profile="${1:-production}"
+  backup_load_profile "$profile"
+  if [[ "$BACKUP_FORMAT" == archive ]]; then backup_run_archive "$profile"; else backup_run_restic "$profile"; fi
+}
+
+backup_archive_location() {
+  local remote="${BACKUP_REMOTE:-}" path="${BACKUP_REMOTE_PATH:-}" value
+  if [[ -z "$remote" && "${RESTIC_REPOSITORY:-}" == rclone:* ]]; then
+    value="${RESTIC_REPOSITORY#rclone:}"; remote="${value%%:*}"; path="${value#*:}"
+  fi
+  printf '%s:%sarchives/%s/%s' "$remote" "${path:+${path%/}/}" "$(hostname -s)" "$BACKUP_PROFILE"
+}
+
+backup_archives_json() {
+  backup_load_profile "${1:-production}"
+  local location; location="$(backup_archive_location)"
+  LOCATION="$location" RCLONE_CONFIG="$RCLONE_CONFIG" python3 - <<'PY'
+import json, os, subprocess
+p = subprocess.run(["rclone", "lsf", os.environ["LOCATION"], "--config", os.environ["RCLONE_CONFIG"],
+                    "--dirs-only", "--max-depth", "1"], text=True, capture_output=True)
+if p.returncode: raise SystemExit(p.returncode)
+items=[]
+for raw in p.stdout.splitlines():
+    name=raw.rstrip("/")
+    if name: items.append({"id":name,"short_id":name,"time":name,"hostname":"archive","paths":["websites/*.zip", "databases/*.sql.gz"]})
+print(json.dumps(items, ensure_ascii=False))
+PY
+}
+
+backup_list() {
+  backup_load_profile "${1:-production}"
+  if [[ "$BACKUP_FORMAT" == archive ]]; then rclone lsf "$(backup_archive_location)" --config "$RCLONE_CONFIG" --dirs-only; else restic snapshots; fi
+}
+backup_snapshots_json() {
+  backup_load_profile "${1:-production}"
+  if [[ "$BACKUP_FORMAT" == archive ]]; then backup_archives_json "$BACKUP_PROFILE"; else restic snapshots --json 2>/dev/null; fi
+}
+backup_check() {
+  backup_load_profile "${1:-production}"
+  if [[ "$BACKUP_FORMAT" == archive ]]; then
+    local location latest
+    location="$(backup_archive_location)"
+    latest="$(rclone lsf "$location" --config "$RCLONE_CONFIG" --dirs-only | sort | tail -n1)"
+    [[ -n "$latest" ]] || die "No archive backup found"
+    rclone lsf "$location/${latest%/}/_SUCCESS" --config "$RCLONE_CONFIG" >/dev/null
+    info "Latest archive is complete: ${latest%/}"
+  else
+    restic check --read-data-subset="${RESTIC_CHECK_SUBSET:-5%}"
+  fi
+}
 
 backup_start() {
   require_root
