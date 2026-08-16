@@ -363,7 +363,7 @@ sudo toolkitctl backup cancel production
 sudo toolkitctl backup snapshots-json production
 ```
 
-Trong Dashboard, bấm **Tải danh sách snapshot**, chọn snapshot rồi bấm **Tạo gói tải xuống**. Toolkit khôi phục snapshot vào vùng tạm, đóng gói `.tar.gz` trong `/var/lib/leodigi-cyberpanel-toolkit/exports` và chỉ cho người đã đăng nhập Dashboard tải xuống. Gói khôi phục không tự ghi đè website/database đang chạy.
+Trong Dashboard, bấm **Tải danh sách snapshot**, chọn snapshot rồi bấm **Tạo gói tải xuống**. Toolkit khôi phục snapshot vào vùng tạm, đóng gói `.tar.gz` trong `/var/lib/leodigi-cyberpanel-toolkit/exports` và chỉ cho người đã đăng nhập Dashboard tải xuống. Liên kết/gói export hết hạn sau 24 giờ. Gói khôi phục không tự ghi đè website/database đang chạy.
 
 Gói snapshot có thể rất lớn và tạm thời cần thêm dung lượng ổ đĩa. Sau khi tải xong, quản trị viên nên xóa gói không còn cần thiết khỏi thư mục `exports`.
 

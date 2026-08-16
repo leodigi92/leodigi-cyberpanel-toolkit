@@ -376,7 +376,7 @@ def backup_body(request: Request) -> str:
     export_links = "".join(
         f'<a class="btn" href="/download/{html.escape(p.name)}">{html.escape(p.name)} · {human_bytes(p.stat().st_size)}</a>'
         for p in sorted(export_dir.glob("*.tar.gz"), key=lambda x: x.stat().st_mtime, reverse=True)[:20]
-        if p.is_file()) if export_dir.is_dir() else ""
+        if p.is_file() and time.time() - p.stat().st_mtime <= 86400) if export_dir.is_dir() else ""
     configure = f"""<form method="post" action="/action/backup-configure" id="backup-config">
 <input type="hidden" name="csrf_token" value="{csrf(request)}"><div class="forms">
 <div><label>Tên cấu hình</label><input name="profile" value="production" required></div>
@@ -693,6 +693,9 @@ def download_export(request: Request, filename: str):
     target = STATE_DIR / "exports" / filename
     if not target.is_file() or target.is_symlink():
         raise HTTPException(404)
+    if time.time() - target.stat().st_mtime > 86400:
+        target.unlink(missing_ok=True)
+        raise HTTPException(410, "Gói tải xuống đã hết hạn")
     return FileResponse(target, filename=filename, media_type="application/gzip")
 
 

@@ -326,7 +326,9 @@ backup_export() {
   backup_load_profile "$profile"
   export_dir="$STATE_DIR/exports/${profile}-${snapshot}"
   archive="$STATE_DIR/exports/${profile}-${snapshot}.tar.gz"
-  install -d -m 0750 "$STATE_DIR/exports"; rm -rf "$export_dir"; rm -f "$archive"
+  install -d -m 0750 "$STATE_DIR/exports"
+  find "$STATE_DIR/exports" -maxdepth 1 -type f -name '*.tar.gz' -mmin +1440 -delete
+  rm -rf "$export_dir"; rm -f "$archive"
   estimated="$(restic stats "$snapshot" --mode raw-data --json 2>/dev/null | python3 -c 'import json,sys; print(int(json.load(sys.stdin).get("total_size",0)))')"
   available="$(df -PB1 "$STATE_DIR" | awk 'NR==2 {print $4}')"
   required=$((estimated * 2 + 1073741824))
