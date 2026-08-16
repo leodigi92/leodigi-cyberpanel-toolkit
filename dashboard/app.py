@@ -507,7 +507,13 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
         raise HTTPException(404)
     if action != "backup-configure":
         rc, output = command(args, timeout)
-    status = "Thành công" if rc == 0 else f"Lỗi (exit {rc})"
+    profile_saved = action == "backup-configure" and bool(profile) and (CONFIG_DIR / f"backup-{profile}.env").is_file()
+    if rc == 0:
+        status = "Thành công"
+    elif profile_saved:
+        status = f"Đã lưu cấu hình và lịch; lần backup ngay bị lỗi (exit {rc})"
+    else:
+        status = f"Lỗi (exit {rc})"
     return_section = "backup" if action.startswith("backup-") else (
         "security" if action.startswith("malware") or action == "doctor" else (
             "wordpress" if action.startswith("wp-") else (
