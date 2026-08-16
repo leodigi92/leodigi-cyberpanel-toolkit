@@ -266,11 +266,6 @@ sudo chmod 600 /etc/leodigi-cyberpanel-toolkit/secrets/rclone.conf
 
 Sau khi tạo remote, tiếp tục tạo profile Restic ở Bước 3 bên dưới. Không bật lịch backup tự động cho đến khi chạy backup và restore thử thành công.
 
-```bash
-sudo toolkitctl backup remote list
-sudo toolkitctl backup remote test gdrive-main
-```
-
 ### OneDrive/Microsoft 365
 
 Đối với OneDrive Business, khai báo Tenant ID và ứng dụng Microsoft Entra. Với SharePoint, ưu tiên quyền `Sites.Selected` và chỉ cấp quyền đúng site lưu backup.
