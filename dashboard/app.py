@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+import json
 import os
+import pwd
 import re
 import secrets
 import shutil
@@ -172,7 +174,49 @@ def remotes() -> list[str]:
     return [line.strip().rstrip(":") for line in output.splitlines() if rc == 0 and line.strip()]
 
 
-def schedules() -> list[tuple[str, str, str]]:
+def site_inventory() -> list[dict[str, str]]:
+    if shutil.which("malwarectl"):
+        try:
+            result = subprocess.run(["malwarectl", "sites"], text=True, capture_output=True, timeout=30)
+            data = json.loads(result.stdout) if result.returncode == 0 else []
+            if isinstance(data, list):
+                return sorted([
+                    {"owner": str(x.get("owner", "unknown")), "domain": str(x.get("domain", "")),
+                     "root": str(x.get("root", ""))}
+                    for x in data if SAFE_NAME.fullmatch(str(x.get("domain", "")))
+                ], key=lambda x: (x["owner"], x["domain"]))
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    result = []
+    home = Path("/home")
+    if home.is_dir():
+        for item in home.iterdir():
+            if item.is_dir() and not item.is_symlink() and (item / "public_html").is_dir() and SAFE_NAME.fullmatch(item.name):
+                try:
+                    owner = pwd.getpwuid(item.stat().st_uid).pw_name
+                except KeyError:
+                    owner = item.name
+                result.append({"owner": owner, "domain": item.name, "root": str(item / "public_html")})
+    return sorted(result, key=lambda x: (x["owner"], x["domain"]))
+
+
+def profile_details() -> list[dict[str, str]]:
+    details = []
+    for profile in profiles():
+        values = {}
+        try:
+            for line in (CONFIG_DIR / f"backup-{profile}.env").read_text().splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    values[key] = value
+        except OSError:
+            pass
+        details.append({"profile": profile, "repository": values.get("RESTIC_REPOSITORY", "unknown"),
+                        "retention": values.get("BACKUP_RETENTION_DAYS", "policy")})
+    return details
+
+
+def schedules() -> list[tuple[str, str, str, str]]:
     result = []
     for timer in sorted(Path("/etc/systemd/system").glob("leodigi-cpt-backup-*.timer")):
         profile = timer.stem.removeprefix("leodigi-cpt-backup-")
@@ -184,7 +228,9 @@ def schedules() -> list[tuple[str, str, str]]:
         except OSError:
             pass
         state = subprocess.run(["systemctl", "is-enabled", timer.stem], text=True, capture_output=True).stdout.strip()
-        result.append((profile, calendar, state or "disabled"))
+        show = subprocess.run(["systemctl", "show", timer.stem, "-p", "NextElapseUSecRealtime", "--value"],
+                              text=True, capture_output=True).stdout.strip()
+        result.append((profile, calendar, state or "disabled", show or "-"))
     return result
 
 
@@ -264,7 +310,7 @@ def backup_body(request: Request) -> str:
     available = profiles()
     options = "".join(f'<option value="{html.escape(p)}">{html.escape(p)}</option>' for p in available)
     select = f'<div><label>Backup profile</label><select name="profile">{options}</select></div>'
-    actions = '<div class="empty">Chưa có profile. Chạy toolkitctl backup configure qua SSH.</div>'
+    actions = '<div class="empty">Chưa có profile. Hãy dùng biểu mẫu cấu hình phía trên.</div>'
     if available:
         actions = (action_form(request, "backup-list", "Xem snapshots", select) +
                    action_form(request, "backup-check", "Kiểm tra repository", select) +
@@ -275,8 +321,11 @@ def backup_body(request: Request) -> str:
     schedule_rows = "".join(f'<tr><td>{html.escape(p)}</td><td>{html.escape(c)}</td><td><span class="badge ok">'
                             f'{html.escape(s)}</span></td><td><form method="post" action="/action/backup-unschedule">'
                             f'<input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" '
-                            f'name="profile" value="{html.escape(p)}"><button class="danger">Xóa lịch</button></form></td></tr>'
-                            for p, c, s in schedules())
+                            f'name="profile" value="{html.escape(p)}"><button class="danger">Xóa lịch</button></form></td>'
+                            f'<td>{html.escape(n)}</td></tr>' for p, c, s, n in schedules())
+    profile_rows = "".join(f'<tr><td><b>{html.escape(x["profile"])}</b></td><td>{html.escape(x["repository"])}</td>'
+                           f'<td>{html.escape(x["retention"])} ngày</td><td><span class="badge ok">Đã cấu hình</span></td></tr>'
+                           for x in profile_details())
     configure = f"""<form method="post" action="/action/backup-configure" id="backup-config">
 <input type="hidden" name="csrf_token" value="{csrf(request)}"><div class="forms">
 <div><label>Tên cấu hình</label><input name="profile" value="production" required></div>
@@ -304,12 +353,14 @@ folders.addEventListener('change',()=>{{if(folders.value)path.value=folders.valu
     return f"""<div class="grid"><section class="card span12"><h2>Cấu hình Google Drive Backup & Schedule</h2>
 <div class="notice">Chọn remote, chọn trực tiếp thư mục trên Drive, số ngày lưu và lịch chạy. Toolkit sẽ tạo Restic profile mã hóa.</div>
 {configure}</section><section class="card span8"><h2>Backup profiles</h2>
-<div class="notice">Restic mã hóa + Rclone cloud. Tác vụ run/check có thể chạy lâu.</div><div class="forms">{actions}</div>
+<div class="notice">Restic mã hóa + Rclone cloud. Tác vụ run/check có thể chạy lâu.</div>
+<table class="table"><thead><tr><th>Profile</th><th>Repository</th><th>Retention</th><th>Trạng thái</th></tr></thead>
+<tbody>{profile_rows or '<tr><td colspan="4">Chưa có profile</td></tr>'}</tbody></table><div class="forms">{actions}</div>
 </section><section class="card span4"><h2>Cloud remotes</h2><table class="table"><thead><tr><th>Remote</th>
 <th>Trạng thái</th></tr></thead><tbody>{rows or '<tr><td colspan="2">Chưa có remote</td></tr>'}</tbody></table>
 </section><section class="card span12"><h2>Lịch backup đang hoạt động</h2><table class="table"><thead>
-<tr><th>Profile</th><th>Lịch systemd</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>
-{schedule_rows or '<tr><td colspan="3">Chưa có lịch</td></tr>'}</tbody></table></section></div>"""
+<tr><th>Profile</th><th>Lịch systemd</th><th>Trạng thái</th><th>Thao tác</th><th>Lần chạy kế tiếp</th></tr></thead><tbody>
+{schedule_rows or '<tr><td colspan="5">Chưa có lịch</td></tr>'}</tbody></table></section></div>"""
 
 
 READ_ACTIONS = {
@@ -330,14 +381,30 @@ def generic_body(request: Request, section: str) -> str:
     }
     heading, actions = definitions[section]
     buttons = "".join(action_form(request, key, label, css="primary") for key, label in actions)
-    domain = '<div><label>Domain</label><input name="target" placeholder="example.com" required></div>'
+    sites = site_inventory()
+    domain_options = "".join(f'<option value="{html.escape(x["domain"])}" data-owner="{html.escape(x["owner"])}">'
+                             f'{html.escape(x["domain"])} · {html.escape(x["owner"])}</option>' for x in sites)
+    domain = f'<div><label>Domain</label><select name="target" class="domain-select" required>' \
+             f'<option value="">Chọn domain...</option>{domain_options}</select></div>'
     if section == "wordpress":
         buttons += action_form(request, "wp-health", "Health check domain", domain)
     elif section == "security":
-        buttons += action_form(request, "malware-scan", "Quét malware domain", domain, "danger")
+        users = sorted({x["owner"] for x in sites})
+        user_options = "".join(f'<option value="{html.escape(x)}">{html.escape(x)}</option>' for x in users)
+        security_fields = (f'<div><label>User CyberPanel</label><select id="security-user"><option value="">Tất cả user</option>'
+                           f'{user_options}</select></div>{domain}')
+        buttons += action_form(request, "malware-scan", "Quét malware domain", security_fields, "danger")
+        buttons += """<script>const su=document.getElementById('security-user'),sd=document.querySelector('.domain-select');
+su.addEventListener('change',()=>{for(const o of sd.options){if(!o.value)continue;o.hidden=!!su.value&&o.dataset.owner!==su.value}
+sd.value=''});</script>"""
     elif section == "ssl":
         buttons += action_form(request, "ssl-check-target", "Kiểm tra SSL domain", domain)
-    return f'<div class="grid"><section class="card span12"><h2>{html.escape(heading)}</h2><div class="forms">{buttons}</div></section></div>'
+    rows = "".join(f'<tr><td>{html.escape(x["owner"])}</td><td>{html.escape(x["domain"])}</td>'
+                   f'<td>{html.escape(x["root"])}</td></tr>' for x in sites)
+    return f'<div class="grid"><section class="card span12"><h2>{html.escape(heading)}</h2><div class="forms">{buttons}</div>' \
+           f'</section><section class="card span12"><h2>Danh sách domain ({len(sites)})</h2><table class="table">' \
+           f'<thead><tr><th>User</th><th>Domain</th><th>Document root</th></tr></thead><tbody>' \
+           f'{rows or "<tr><td colspan=3>Không tìm thấy domain</td></tr>"}</tbody></table></section></div>'
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -419,7 +486,7 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
             if code: rc = code; break
         if rc == 0 and run_now == "yes":
             rc, text = command(["backup", "run", profile], 3600); outputs.append(text)
-        args, output = ["backup", "configure", profile], "\n\n".join(outputs)
+        args, output = ["backup", "configure-noninteractive", profile], "\n\n".join(outputs)
     elif action == "backup-unschedule":
         profile = valid_name(profile, "profile")
         args = ["backup", "unschedule", profile]
@@ -441,10 +508,16 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
     if action != "backup-configure":
         rc, output = command(args, timeout)
     status = "Thành công" if rc == 0 else f"Lỗi (exit {rc})"
+    return_section = "backup" if action.startswith("backup-") else (
+        "security" if action.startswith("malware") or action == "doctor" else (
+            "wordpress" if action.startswith("wp-") else (
+                "ssl" if action.startswith("ssl-") else "overview")))
+    back_url = "/" if return_section == "overview" else f"/section/{return_section}"
     body = (f'<div class="notice {"" if rc == 0 else "warn"}"><b>{html.escape(status)}</b> · '
-            f'<code>{html.escape("toolkitctl " + " ".join(args))}</code></div><section class="card">'
+            f'<code>{html.escape("toolkitctl " + " ".join(args))}</code></div>'
+            f'<p><a class="btn primary" href="{back_url}">Quay lại</a></p><section class="card">'
             f'<pre class="terminal">{html.escape(output or "Không có output")}</pre></section>')
-    return shell(request, "overview", action, body)
+    return shell(request, return_section, action, body)
 
 
 @app.get("/api/overview")
