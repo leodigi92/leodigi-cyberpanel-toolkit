@@ -181,7 +181,90 @@ VPS không có trình duyệt sẽ yêu cầu xác thực trên máy tính cá n
 
 ### Google Drive
 
-Nên tạo OAuth Client ID riêng trong Google Cloud thay vì Client ID dùng chung. Sau khi tạo remote, kiểm tra:
+Từ năm 2026, Client ID dùng chung của Rclone đang được ngừng hỗ trợ. Hãy tạo OAuth Client ID riêng để backup không bị gián đoạn.
+
+#### 1. Tạo OAuth Client riêng
+
+1. Mở [Google Cloud Console](https://console.cloud.google.com/) và tạo/chọn một project, ví dụ `LeoDigi CyberPanel Backup`.
+2. Vào **APIs & Services > Library**, tìm **Google Drive API** rồi nhấn **Enable**.
+3. Vào **Google Auth Platform > Branding** và cấu hình màn hình đồng ý OAuth.
+4. Nếu dùng tài khoản Google cá nhân, chọn **External**. Trong thời gian ứng dụng ở chế độ Testing, vào **Audience > Test users** và thêm chính tài khoản Google Drive nhận backup.
+5. Vào **Google Auth Platform > Clients > Create Client**.
+6. Chọn **Application type: Desktop app**, đặt tên `LeoDigi Rclone`, rồi tạo Client.
+7. Lưu lại **Client ID** và **Client Secret**. Không gửi các giá trị này qua chat, không chụp màn hình và không commit lên GitHub.
+
+Client ID đầy đủ thường kết thúc bằng `.apps.googleusercontent.com`. Nếu Client Secret đã bị lộ, hãy xóa OAuth Client cũ và tạo Client mới.
+
+#### 2. Tạo remote trên VPS
+
+```bash
+sudo toolkitctl backup remote add
+```
+
+Trong trình cấu hình Rclone:
+
+```text
+New remote name> gdrive-main
+Storage> drive
+client_id> CLIENT_ID_CUA_BAN
+client_secret> CLIENT_SECRET_CUA_BAN
+scope> 1
+service_account_file> [nhấn Enter để trống]
+Edit advanced config? n
+Use web browser to automatically authenticate rclone with remote? n
+```
+
+Số thứ tự của `drive` có thể thay đổi theo phiên bản Rclone; hãy chọn mục có tên **Google Drive** thay vì phụ thuộc cố định vào một con số.
+
+Sau khi chọn `n` ở bước mở trình duyệt, giữ nguyên cửa sổ SSH. VPS sẽ hiển thị lệnh gần giống:
+
+```bash
+rclone authorize "drive" "CHUOI_CAU_HINH"
+```
+
+và chờ tại `config_token>`.
+
+#### 3. Xác thực trên máy Windows không cần trình duyệt trên VPS
+
+Tải bản Rclone mới từ [rclone.org/downloads](https://rclone.org/downloads/) và giải nén, ví dụ tại `D:\Rclone`. Mở CMD rồi chạy **nguyên lệnh VPS cung cấp**, chỉ thay chương trình `rclone` bằng đường dẫn:
+
+```cmd
+D:\Rclone\rclone.exe authorize "drive" "CHUOI_CAU_HINH"
+```
+
+Phải dùng `"drive"`, không dùng `"onedrive"`. Trình duyệt trên Windows sẽ mở để đăng nhập Google và cấp quyền. Copy toàn bộ token JSON mà CMD trả về, dán vào `config_token>` trên VPS rồi nhấn Enter. Không gửi hoặc lưu token này trong tài liệu công khai.
+
+Nếu Rclone hỏi **Configure this as a Shared Drive?**:
+
+- Chọn `n` nếu lưu trong **My Drive/Google Drive cá nhân**.
+- Chọn `y` nếu dùng **Google Workspace Shared Drive**, sau đó chọn đúng Shared Drive.
+
+Tại **Keep this remote?**, chọn `y`; sau đó chọn `q` để thoát cấu hình.
+
+#### 4. Kiểm tra kết nối
+
+```bash
+sudo toolkitctl backup remote list
+sudo toolkitctl backup remote test gdrive-main
+```
+
+Kết nối thành công khi lệnh test liệt kê được thư mục trên Drive và không báo lỗi OAuth/API. Có thể tạo một thư mục thử:
+
+```bash
+sudo env RCLONE_CONFIG=/etc/leodigi-cyberpanel-toolkit/secrets/rclone.conf \
+  rclone mkdir gdrive-main:LeoDigi-Backups/Test
+sudo env RCLONE_CONFIG=/etc/leodigi-cyberpanel-toolkit/secrets/rclone.conf \
+  rclone lsd gdrive-main:LeoDigi-Backups
+```
+
+File cấu hình có token được lưu tại `/etc/leodigi-cyberpanel-toolkit/secrets/rclone.conf`. Giữ quyền truy cập file ở mức `600` và chỉ cho root:
+
+```bash
+sudo chown root:root /etc/leodigi-cyberpanel-toolkit/secrets/rclone.conf
+sudo chmod 600 /etc/leodigi-cyberpanel-toolkit/secrets/rclone.conf
+```
+
+Sau khi tạo remote, tiếp tục tạo profile Restic ở Bước 3 bên dưới. Không bật lịch backup tự động cho đến khi chạy backup và restore thử thành công.
 
 ```bash
 sudo toolkitctl backup remote list
