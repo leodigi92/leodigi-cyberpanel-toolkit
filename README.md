@@ -1,5 +1,7 @@
 # LeoDigi CyberPanel Toolkit
 
+**Documentation:** [English](README.md) · [Tiếng Việt](README.vi.md)
+
 Production-oriented, modular operations toolkit for **CyberPanel Free + OpenLiteSpeed**. It adds encrypted cloud backup, WordPress staging/clone helpers, malware scanning, firewall guardrails, mail diagnostics/Rspamd, wildcard SSL automation, monitoring and a local-only dashboard without modifying CyberPanel core.
 
 > Version 1.0.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.

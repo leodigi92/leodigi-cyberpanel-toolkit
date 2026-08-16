@@ -4,7 +4,6 @@ set -Eeuo pipefail
 core_preflight() {
   require_root
   detect_os
-  ensure_layout
   local failures=0
   [[ -d /usr/local/CyberCP ]] || { warn "CyberPanel directory not detected."; failures=$((failures+1)); }
   [[ -d /usr/local/lsws ]] || { warn "OpenLiteSpeed directory not detected."; failures=$((failures+1)); }

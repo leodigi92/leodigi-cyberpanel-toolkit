@@ -32,8 +32,10 @@ while (($#)); do
 done
 
 require_root
-acquire_lock
-ensure_layout
+if [[ "$APPLY_CHANGES" != yes ]]; then
+  LOG_DIR=/tmp/leodigi-cyberpanel-toolkit
+  LOG_FILE="$LOG_DIR/preflight-$RUN_ID.log"
+fi
 core_preflight || warn "Preflight has warnings; review before --apply."
 
 if [[ "$APPLY_CHANGES" != yes ]]; then
@@ -41,6 +43,8 @@ if [[ "$APPLY_CHANGES" != yes ]]; then
   exit 0
 fi
 
+acquire_lock
+ensure_layout
 confirm "Install $TOOLKIT_NAME profile=$PROFILE?" || die "Cancelled"
 backup_file /etc/systemd/system/leodigi-cpt-dashboard.service
 install -d -m 0755 "$INSTALL_DIR"
