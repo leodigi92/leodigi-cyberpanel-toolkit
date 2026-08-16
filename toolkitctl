@@ -20,7 +20,7 @@ Usage: toolkitctl <command> [arguments]
   preflight                     Installation checks
   module list                   List modules
   module install NAME           Install/configure module
-  backup <configure|run|list|check|restore|remote>
+  backup <configure|inventory|remote|schedule|unschedule|start|cancel|status|list|snapshots-json|check|restore|export>
   wp <list|health|permissions|clone|staging>
   malware <scan|scan-all|report|quarantine|restore>
   firewall <status|apply|open|close>
