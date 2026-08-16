@@ -72,7 +72,9 @@ EOF
 }
 
 backup_load_profile() {
-  local profile="${1:-production}" file="$CONFIG_DIR/backup-${profile}.env"
+  local profile file
+  profile="${1:-production}"
+  file="$CONFIG_DIR/backup-${profile}.env"
   [[ -r "$file" ]] || die "Backup profile not configured: $profile"
   source "$file"
   export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RCLONE_CONFIG RESTIC_CACHE_DIR
