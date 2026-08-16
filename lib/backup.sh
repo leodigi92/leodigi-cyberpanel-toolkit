@@ -128,7 +128,7 @@ backup_inventory() {
     [[ "$db" =~ ^[A-Za-z0-9_$-]{1,64}$ ]] || continue
     case "$db" in information_schema|performance_schema|mysql|sys) continue ;; esac
     ((first)) || printf ','; first=0; printf '"%s"' "$db"
-  done < <(mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true)
+  done < <(backup_mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true)
   printf ']}\n'
 }
 
@@ -171,6 +171,22 @@ backup_load_profile() {
   [[ -s "$RESTIC_PASSWORD_FILE" ]] || die "Restic password file missing"
 }
 
+backup_mariadb() {
+  if [[ -s /etc/cyberpanel/mysqlPassword ]]; then
+    MYSQL_PWD="$(< /etc/cyberpanel/mysqlPassword)" mariadb -u root "$@"
+  else
+    mariadb "$@"
+  fi
+}
+
+backup_mariadb_dump() {
+  if [[ -s /etc/cyberpanel/mysqlPassword ]]; then
+    MYSQL_PWD="$(< /etc/cyberpanel/mysqlPassword)" mariadb-dump -u root "$@"
+  else
+    mariadb-dump "$@"
+  fi
+}
+
 backup_dump_databases() {
   local dump_dir="$1" selection="${2:-}" db
   install -d -m 0700 "$dump_dir"
@@ -178,8 +194,8 @@ backup_dump_databases() {
   while IFS= read -r db; do
     [[ -n "$db" && "$db" != information_schema && "$db" != performance_schema && "$db" != mysql && "$db" != sys ]] || continue
     info "Dumping database: $db"
-    mariadb-dump --single-transaction --routines --events --triggers --databases "$db" | gzip -c >"$dump_dir/$db.sql.gz"
-  done < <(if [[ -n "$selection" ]]; then tr ',' '\n' <<<"$selection"; else mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true; fi)
+    backup_mariadb_dump --single-transaction --routines --events --triggers --databases "$db" | gzip -c >"$dump_dir/$db.sql.gz"
+  done < <(if [[ -n "$selection" ]]; then tr ',' '\n' <<<"$selection"; else backup_mariadb --batch --skip-column-names -e 'SHOW DATABASES' 2>/dev/null || true; fi)
 }
 
 backup_run() {
