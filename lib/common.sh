@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 TOOLKIT_NAME="LeoDigi CyberPanel Toolkit"
+TOOLKIT_VENDOR="LeoDigi"
+TOOLKIT_WEBSITE="https://leodigi.dev"
 TOOLKIT_ROOT="${TOOLKIT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DEFAULT_CONFIG="${TOOLKIT_ROOT}/config/default.env"
 CONFIG_FILE="${CPT_CONFIG:-/etc/leodigi-cyberpanel-toolkit/toolkit.env}"

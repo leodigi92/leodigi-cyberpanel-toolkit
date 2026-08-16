@@ -24,7 +24,7 @@ def authenticated(request: Request) -> bool:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
-    return f"<style>{STYLE}</style><main><div class=card><h1>CyberPanel Toolkit</h1><form method=post><input name=user placeholder=User><input type=password name=password placeholder=Password><button>Login</button></form></div></main>"
+    return f"<style>{STYLE}</style><main><div class=card><h1>LeoDigi CyberPanel Toolkit</h1><p>leodigi.dev</p><form method=post><input name=user placeholder=User><input type=password name=password placeholder=Password><button>Login</button></form></div></main>"
 
 @app.post("/login")
 def login(request: Request, user: str = Form(...), password: str = Form(...)):
@@ -40,7 +40,7 @@ def login(request: Request, user: str = Form(...), password: str = Form(...)):
 def home(request: Request):
     if not authenticated(request): return RedirectResponse("/login", 303)
     buttons="".join(f"<form method=post action=/run/{key}><button>{key}</button></form>" for key in ALLOWED)
-    return f"<style>{STYLE}</style><main><h1>LeoDigi CyberPanel Toolkit</h1><div class='card grid'>{buttons}</div><div class=card><p>Read-only actions are exposed here. Destructive operations remain CLI-only and require confirmation.</p></div></main>"
+    return f"<style>{STYLE}</style><main><h1>LeoDigi CyberPanel Toolkit</h1><p><a href='https://leodigi.dev' target='_blank' rel='noopener'>leodigi.dev</a></p><div class='card grid'>{buttons}</div><div class=card><p>Read-only actions are exposed here. Destructive operations remain CLI-only and require confirmation.</p></div></main>"
 
 @app.post("/run/{action}", response_class=HTMLResponse)
 def run_action(request: Request, action: str):

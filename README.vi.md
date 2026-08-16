@@ -2,9 +2,11 @@
 
 **Tài liệu:** [Tiếng Việt](README.vi.md) · [English](README.md)
 
+**Sản phẩm được phát triển bởi [LeoDigi](https://leodigi.dev)**
+
 LeoDigi CyberPanel Toolkit là bộ công cụ quản trị mở rộng dành cho **CyberPanel Free + OpenLiteSpeed**. Toolkit hoạt động độc lập, không sửa mã nguồn lõi CyberPanel, nên hạn chế lỗi khi CyberPanel được cập nhật.
 
-> Phiên bản 1.0.1 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
+> Phiên bản 1.0.2 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
 
 ## 1. Chức năng
 
@@ -71,7 +73,7 @@ cd leodigi-cyberpanel-toolkit
 Nếu tải file ZIP:
 
 ```bash
-unzip leodigi-cyberpanel-toolkit-v1.0.1.zip
+unzip leodigi-cyberpanel-toolkit-v1.0.2.zip
 cd leodigi-cyberpanel-toolkit
 ```
 
@@ -84,7 +86,7 @@ bash tests/run.sh
 Kết quả đúng:
 
 ```text
-1.0.1
+1.0.2
 All tests passed
 ```
 
@@ -511,3 +513,5 @@ Chỉ xem là backup hoạt động khi đã restore thử thành công vào th�
 ## License
 
 MIT. Xem [LICENSE](LICENSE).
+
+Website chính thức: [leodigi.dev](https://leodigi.dev)
