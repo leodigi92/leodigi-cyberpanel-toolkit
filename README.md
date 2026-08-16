@@ -6,7 +6,7 @@
 
 Production-oriented, modular operations toolkit for **CyberPanel Free + OpenLiteSpeed**. It adds encrypted cloud backup, WordPress staging/clone helpers, malware scanning, firewall guardrails, mail diagnostics/Rspamd, wildcard SSL automation, monitoring and a local-only dashboard without modifying CyberPanel core.
 
-> Version 1.0.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
+> Version 1.1.0 is intended for experienced Linux administrators. Test on a staging VPS first. A toolkit cannot compensate for compromised root credentials, unsupported operating systems or missing off-server backups.
 
 ## Features
 
@@ -64,6 +64,30 @@ Profiles:
 - `full`: All modules including Mail tooling and Dashboard.
 
 The installer never installs Rspamd, manages firewall rules or installs Netdata merely because the full profile is selected. High-impact components remain opt-in in `/etc/leodigi-cyberpanel-toolkit/toolkit.env`.
+
+### Direct Dashboard access
+
+Install all modules and expose the Dashboard over HTTP on TCP 9443:
+
+```bash
+sudo bash install.sh --profile full --apply --yes \
+  --dashboard-public \
+  --dashboard-port 9443
+```
+
+This makes `http://SERVER_IP:9443` available and opens the firewall port. Use HTTP only on a private network or VPN.
+
+To serve TLS directly, first point the domain to the VPS and obtain a valid certificate:
+
+```bash
+sudo bash install.sh --profile full --apply --yes \
+  --dashboard-public \
+  --dashboard-port 9443 \
+  --dashboard-domain toolkit.example.com \
+  --dashboard-https
+```
+
+The default certificate paths are `/etc/letsencrypt/live/DOMAIN/fullchain.pem` and `privkey.pem`. Override them with `--dashboard-cert` and `--dashboard-key` when necessary. The installer fails closed when TLS files are unreadable or the Dashboard cannot start. Port 8090 remains reserved for CyberPanel.
 
 ## First checks
 
@@ -127,7 +151,7 @@ sudo toolkitctl wp clone example.com staging.example.com
 sudo toolkitctl wp staging example.com staging.example.com
 ```
 
-Clone/staging creates a Restic backup first. Production push is intentionally not exposed in v1.0.0 because file/database merge policy is application-specific; use a reviewed clone workflow or restore point.
+Clone/staging creates a Restic backup first. Production push is intentionally not exposed in v1.1.0 because file/database merge policy is application-specific; use a reviewed clone workflow or restore point.
 
 ## Malware and firewall
 
