@@ -6,7 +6,7 @@
 
 LeoDigi CyberPanel Toolkit là bộ công cụ quản trị mở rộng dành cho **CyberPanel Free + OpenLiteSpeed**. Toolkit hoạt động độc lập, không sửa mã nguồn lõi CyberPanel, nên hạn chế lỗi khi CyberPanel được cập nhật.
 
-> Phiên bản 1.0.2 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
+> Phiên bản 1.1.0 dành cho quản trị viên có quyền root. Hãy snapshot VPS hoặc thử trên VPS staging trước khi cài lên máy production đang phục vụ website.
 
 ## 1. Chức năng
 
@@ -73,7 +73,7 @@ cd leodigi-cyberpanel-toolkit
 Nếu tải file ZIP:
 
 ```bash
-unzip leodigi-cyberpanel-toolkit-v1.0.2.zip
+unzip leodigi-cyberpanel-toolkit-v1.1.0.zip
 cd leodigi-cyberpanel-toolkit
 ```
 
@@ -86,7 +86,7 @@ bash tests/run.sh
 Kết quả đúng:
 
 ```text
-1.0.2
+1.1.0
 All tests passed
 ```
 
@@ -133,6 +133,52 @@ sudo bash install.sh --profile full --apply --yes
 ```
 
 Không dùng `--yes` ở lần cài đầu trên VPS production.
+
+#### Cài Full và truy cập Dashboard bằng IP:9443
+
+Lệnh sau cài Dashboard, đổi bind thành `0.0.0.0` và mở TCP `9443` trong firewall:
+
+```bash
+sudo bash install.sh --profile full --apply --yes \
+  --dashboard-public \
+  --dashboard-port 9443
+```
+
+Sau khi cài, truy cập `http://IP_VPS:9443`. Chế độ HTTP chỉ phù hợp để kiểm tra trong mạng riêng/VPN. Không nhập mật khẩu Dashboard qua Internet công cộng bằng HTTP.
+
+#### Cài Full và truy cập https://domain:9443
+
+Điều kiện:
+
+1. Bản ghi DNS của domain đã trỏ về IP VPS.
+2. Chứng chỉ và private key hợp lệ đã tồn tại trên VPS.
+3. Đường dẫn mặc định là `/etc/letsencrypt/live/DOMAIN/fullchain.pem` và `privkey.pem`.
+
+Ví dụ:
+
+```bash
+sudo bash install.sh --profile full --apply --yes \
+  --dashboard-public \
+  --dashboard-port 9443 \
+  --dashboard-domain kv3.kmar.dev \
+  --dashboard-https
+```
+
+Sau khi cài, truy cập `https://kv3.kmar.dev:9443`.
+
+Nếu chứng chỉ nằm ở đường dẫn khác:
+
+```bash
+sudo bash install.sh --profile full --apply --yes \
+  --dashboard-public \
+  --dashboard-port 9443 \
+  --dashboard-domain kv3.kmar.dev \
+  --dashboard-https \
+  --dashboard-cert /duong-dan/fullchain.pem \
+  --dashboard-key /duong-dan/privkey.pem
+```
+
+Installer sẽ dừng nếu chứng chỉ không đọc được hoặc Dashboard không khởi động thành công. Cổng `8090` vẫn dành riêng cho CyberPanel; không đặt Dashboard Toolkit vào cổng đó.
 
 ## 8. Kiểm tra ngay sau khi cài
 
@@ -572,7 +618,7 @@ sudo toolkitctl dashboard reset-password
 sudo toolkitctl dashboard status
 ```
 
-Dashboard mặc định chỉ nghe tại:
+Nếu không truyền `--dashboard-public`, Dashboard mặc định chỉ nghe tại:
 
 ```text
 127.0.0.1:9443
@@ -601,6 +647,8 @@ sudo ss -lntp | grep ':9443'
 ```
 
 Tiếp theo mở firewall theo hướng dẫn ở mục 12 và chỉ cho phép IP quản trị hoặc dải mạng VPN. Truy cập trực tiếp `http://IP_VPS:9443` không có TLS ở lớp Uvicorn; không nên dùng qua Internet công cộng vì thông tin đăng nhập có thể đi qua kết nối không mã hóa. Phương án production được khuyến nghị là subdomain HTTPS reverse proxy.
+
+Từ phiên bản 1.1.0, installer có thể tự cấu hình bind, firewall và TLS bằng các tùy chọn `--dashboard-public`, `--dashboard-port`, `--dashboard-domain` và `--dashboard-https` ở mục 7.
 
 Dashboard chỉ cung cấp hành động đọc/kiểm tra. Những thao tác xóa, restore, firewall hoặc clone website vẫn phải dùng CLI và xác nhận.
 
