@@ -1,0 +1,20 @@
+[Unit]
+Description=LeoDigi CyberPanel Toolkit dashboard
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/leodigi-cyberpanel-toolkit/toolkit.env
+EnvironmentFile=/etc/leodigi-cyberpanel-toolkit/secrets/dashboard.env
+WorkingDirectory=/opt/leodigi-cyberpanel-toolkit/dashboard
+ExecStart=/opt/leodigi-cyberpanel-toolkit/dashboard/.venv/bin/uvicorn app:app --host ${DASHBOARD_BIND} --port ${DASHBOARD_PORT} --workers ${DASHBOARD_WORKERS}
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/leodigi-cyberpanel-toolkit /var/log/leodigi-cyberpanel-toolkit
+
+[Install]
+WantedBy=multi-user.target

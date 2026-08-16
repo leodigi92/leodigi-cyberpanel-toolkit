@@ -1,0 +1,5 @@
+[Unit]
+Description=LeoDigi CyberPanel health check
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'source /opt/leodigi-cyberpanel-toolkit/lib/common.sh; source /opt/leodigi-cyberpanel-toolkit/lib/core.sh; source /opt/leodigi-cyberpanel-toolkit/lib/monitoring.sh; monitoring_collect'

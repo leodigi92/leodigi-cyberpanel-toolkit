@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+TOOLKIT_ROOT="${TOOLKIT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+[[ -r "$TOOLKIT_ROOT/lib/common.sh" ]] || TOOLKIT_ROOT=/opt/leodigi-cyberpanel-toolkit
+source "$TOOLKIT_ROOT/lib/common.sh"
+source "$TOOLKIT_ROOT/lib/core.sh"
+
+for lib in backup wordpress security mail ssl monitoring dashboard; do
+  [[ -r "$TOOLKIT_ROOT/lib/$lib.sh" ]] && source "$TOOLKIT_ROOT/lib/$lib.sh"
+done
+
+usage() {
+  cat <<'EOF'
+LeoDigi CyberPanel Toolkit
+
+Usage: toolkitctl <command> [arguments]
+  status|health                 Component status
+  doctor                        Extended diagnostics
+  preflight                     Installation checks
+  module list                   List modules
+  module install NAME           Install/configure module
+  backup <configure|run|list|check|restore|remote>
+  wp <list|health|permissions|clone|staging>
+  malware <scan|scan-all|report|quarantine|restore>
+  firewall <status|apply|open|close>
+  mail <status|check|queue|install-rspamd>
+  ssl <check|issue|wildcard|renew>
+  monitoring <status|install|test-alert>
+  dashboard <status|install|reset-password>
+  restore-points                List configuration restore points
+  rollback ID                   Restore saved configuration
+  update [PACKAGE]              Update from a verified local package
+  uninstall                     Remove toolkit (preserve data by default)
+  logs                          Follow latest log
+  version                       Print version
+
+Global options: --apply --yes --dry-run
+EOF
+}
+
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --apply) APPLY_CHANGES=yes ;;
+    --dry-run) DRY_RUN=yes ;;
+    --yes|-y) ASSUME_YES=yes ;;
+    *) args+=("$arg") ;;
+  esac
+done
+set -- "${args[@]}"
+command="${1:-help}"; shift || true
+
+dispatch_module() {
+  local module="${1:?}" action="${2:-install}"; shift 2 || true
+  local function="${module}_${action//-/_}"
+  declare -F "$function" >/dev/null || die "Unsupported module action: $module $action"
+  "$function" "$@"
+}
+
+case "$command" in
+  help|-h|--help) usage ;;
+  status|health) core_health ;;
+  doctor) core_doctor ;;
+  preflight) core_preflight ;;
+  restore-points) core_restore_points ;;
+  rollback) core_rollback "$@" ;;
+  update) exec "$TOOLKIT_ROOT/update.sh" "$@" ;;
+  uninstall) exec "$TOOLKIT_ROOT/uninstall.sh" "$@" ;;
+  version) cat "$TOOLKIT_ROOT/VERSION" ;;
+  logs) latest=$(find "$LOG_DIR" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-); [[ -n "$latest" ]] && tail -n 200 -f "$latest" || die "No logs" ;;
+  module)
+    sub="${1:-list}"; shift || true
+    if [[ "$sub" == list ]]; then printf '%s\n' core backup wordpress security mail ssl monitoring dashboard; else dispatch_module "${1:?module}" "$sub" "${@:2}"; fi
+    ;;
+  backup) dispatch_module backup "${1:-help}" "${@:2}" ;;
+  wp) dispatch_module wordpress "${1:-help}" "${@:2}" ;;
+  malware) dispatch_module security_malware "${1:-help}" "${@:2}" ;;
+  firewall) dispatch_module security_firewall "${1:-status}" "${@:2}" ;;
+  mail) dispatch_module mail "${1:-status}" "${@:2}" ;;
+  ssl) dispatch_module ssl "${1:-check}" "${@:2}" ;;
+  monitoring) dispatch_module monitoring "${1:-status}" "${@:2}" ;;
+  dashboard) dispatch_module dashboard "${1:-status}" "${@:2}" ;;
+  *) die "Unknown command: $command" ;;
+esac
