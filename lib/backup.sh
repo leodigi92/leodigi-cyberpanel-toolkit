@@ -12,9 +12,13 @@ toolkitctl backup remote dirs NAME [PATH]
 toolkitctl backup schedule PROFILE daily|twice-daily|weekly|monthly|hourly [HH:MM]
 toolkitctl backup unschedule PROFILE
 toolkitctl backup run [PROFILE]
+toolkitctl backup start|cancel|status [PROFILE]
 toolkitctl backup list [PROFILE]
+toolkitctl backup snapshots-json [PROFILE]
 toolkitctl backup check [PROFILE]
 toolkitctl backup restore PROFILE SNAPSHOT TARGET
+toolkitctl backup export PROFILE SNAPSHOT
+toolkitctl backup export-start PROFILE SNAPSHOT
 EOF
 }
 
@@ -187,6 +191,25 @@ backup_mariadb_dump() {
   fi
 }
 
+backup_job_dir() { printf '%s/backup-jobs' "$STATE_DIR"; }
+
+backup_job_state() {
+  local profile="$1" status="$2" phase="$3" message="${4:-}" dir tmp
+  dir="$(backup_job_dir)"; install -d -m 0750 "$dir"
+  tmp="$dir/${profile}.state.json.tmp"
+  PROFILE="$profile" STATUS="$status" PHASE="$phase" MESSAGE="$message" PID_VALUE="$$" \
+    python3 - "$tmp" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+data = {"profile": os.environ["PROFILE"], "status": os.environ["STATUS"],
+        "phase": os.environ["PHASE"], "message": os.environ.get("MESSAGE", ""),
+        "pid": int(os.environ["PID_VALUE"]), "updated": datetime.now(timezone.utc).isoformat()}
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+PY
+  mv -f "$tmp" "$dir/${profile}.state.json"
+}
+
 backup_dump_databases() {
   local dump_dir="$1" selection="${2:-}" db
   install -d -m 0700 "$dump_dir"
@@ -200,15 +223,20 @@ backup_dump_databases() {
 
 backup_run() {
   require_root; acquire_lock
-  local profile="${1:-production}" stage="$STATE_DIR/jobs/backup-$RUN_ID"
+  local profile="${1:-production}" stage="$STATE_DIR/jobs/backup-$RUN_ID" job_dir progress rc=0
   backup_load_profile "$profile"
+  job_dir="$(backup_job_dir)"; install -d -m 0750 "$job_dir"
+  progress="$job_dir/${profile}.progress.ndjson"; : >"$progress"
+  backup_job_state "$profile" running preparing "Đang chuẩn bị backup"
   install -d -m 0700 "$stage/database"
-  trap 'rm -rf "$stage"' RETURN
+  trap 'exit_code=$?; rm -rf "$stage"; if ((exit_code != 0)); then backup_job_state "$profile" failed failed "Backup dừng hoặc thất bại (exit $exit_code)"; fi' EXIT
   local scope="${BACKUP_SCOPE:-all}" selected_databases="${BACKUP_DATABASES:-}"
+  backup_job_state "$profile" running database "Đang dump database"
   backup_dump_databases "$stage/database" "$([[ "$scope" == selected ]] && printf %s "$selected_databases")"
   printf '{"run_id":"%s","hostname":"%s","created":"%s","scope":"%s","site_roots":"%s","databases":"%s"}\n' \
     "$RUN_ID" "$(hostname -f)" "$(date -u +%FT%TZ)" "$scope" "${BACKUP_SITE_ROOTS:-all}" "${BACKUP_DATABASES:-all}" >"$stage/manifest.json"
   if ! restic snapshots --json >/dev/null 2>&1; then
+    backup_job_state "$profile" running initialize "Đang khởi tạo repository mã hóa"
     info "Initializing encrypted repository"
     restic init
   fi
@@ -219,18 +247,109 @@ backup_run() {
   else
     IFS=',' read -r -a sources <<<"${BACKUP_SOURCES:-/home,/etc}"
   fi
-  restic backup "${sources[@]}" "$stage" --tag "profile:$profile" --tag cyberpanel --host "$(hostname -s)" --exclude-caches
+  backup_job_state "$profile" running upload "Đang mã hóa và tải dữ liệu lên cloud"
+  set +e
+  restic backup "${sources[@]}" "$stage" --tag "profile:$profile" --tag cyberpanel --host "$(hostname -s)" --exclude-caches --json 2>&1 | tee -a "$progress"
+  rc=${PIPESTATUS[0]}
+  set -e
+  ((rc == 0)) || return "$rc"
+  backup_job_state "$profile" running retention "Đang áp dụng chính sách lưu trữ"
   if [[ -n "${BACKUP_RETENTION_DAYS:-}" ]]; then
     if ((BACKUP_RETENTION_DAYS > 0)); then restic forget --prune --keep-within "${BACKUP_RETENTION_DAYS}d"; fi
   else
     restic forget --prune --keep-daily "${BACKUP_RETENTION_DAILY:-7}" --keep-weekly "${BACKUP_RETENTION_WEEKLY:-4}" --keep-monthly "${BACKUP_RETENTION_MONTHLY:-6}" --keep-yearly "${BACKUP_RETENTION_YEARLY:-1}"
   fi
   printf '%s\n' "$(date -u +%FT%TZ) profile=$profile status=PASS" >"$STATE_DIR/last-backup"
+  backup_job_state "$profile" completed completed "Backup hoàn tất"
   info "Backup completed: $profile"
 }
 
 backup_list() { backup_load_profile "${1:-production}"; restic snapshots; }
+backup_snapshots_json() { backup_load_profile "${1:-production}"; restic snapshots --json 2>/dev/null; }
 backup_check() { backup_load_profile "${1:-production}"; restic check --read-data-subset="${RESTIC_CHECK_SUBSET:-5%}"; }
+
+backup_start() {
+  require_root
+  local profile="${1:-production}" unit="leodigi-cpt-backup-now-${1:-production}"
+  [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid profile"
+  backup_load_profile "$profile"
+  if systemctl is-active --quiet "$unit.service" || systemctl is-active --quiet "leodigi-cpt-backup-${profile}.service"; then
+    die "Backup is already running: $profile"
+  fi
+  backup_job_state "$profile" queued queued "Đang chờ systemd khởi chạy"
+  systemd-run --unit="$unit" --collect --no-block --property=Nice=10 \
+    --property=IOSchedulingClass=best-effort --property=IOSchedulingPriority=7 \
+    /usr/local/sbin/toolkitctl backup run "$profile"
+  info "Backup queued in background: $profile"
+}
+
+backup_cancel() {
+  require_root
+  local profile="${1:-production}" stopped=0
+  [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid profile"
+  for unit in "leodigi-cpt-backup-now-${profile}.service" "leodigi-cpt-backup-${profile}.service"; do
+    if systemctl is-active --quiet "$unit"; then systemctl stop "$unit"; stopped=1; fi
+  done
+  ((stopped)) || die "No running backup for profile: $profile"
+  backup_job_state "$profile" cancelled cancelled "Backup đã được dừng theo yêu cầu"
+}
+
+backup_status() {
+  local profile="${1:-production}" dir state progress
+  [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid profile"
+  dir="$(backup_job_dir)"; state="$dir/${profile}.state.json"; progress="$dir/${profile}.progress.ndjson"
+  PROFILE="$profile" STATE_FILE="$state" PROGRESS_FILE="$progress" python3 - <<'PY'
+import json, os
+state = {"profile": os.environ["PROFILE"], "status": "idle", "phase": "idle", "message": "Chưa chạy"}
+try:
+    with open(os.environ["STATE_FILE"], encoding="utf-8") as f: state.update(json.load(f))
+except (OSError, ValueError): pass
+last = None
+try:
+    with open(os.environ["PROGRESS_FILE"], encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                item=json.loads(line)
+                if item.get("message_type") in ("status", "summary"): last=item
+            except ValueError: pass
+except OSError: pass
+if last: state["progress"] = last
+print(json.dumps(state, ensure_ascii=False))
+PY
+}
+
+backup_export() {
+  require_root
+  local profile="${1:?profile}" snapshot="${2:?snapshot}" export_dir archive estimated available required
+  [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid profile"
+  [[ "$snapshot" =~ ^[A-Fa-f0-9]{6,64}$ || "$snapshot" == latest ]] || die "Invalid snapshot"
+  backup_load_profile "$profile"
+  export_dir="$STATE_DIR/exports/${profile}-${snapshot}"
+  archive="$STATE_DIR/exports/${profile}-${snapshot}.tar.gz"
+  install -d -m 0750 "$STATE_DIR/exports"; rm -rf "$export_dir"; rm -f "$archive"
+  estimated="$(restic stats "$snapshot" --mode raw-data --json 2>/dev/null | python3 -c 'import json,sys; print(int(json.load(sys.stdin).get("total_size",0)))')"
+  available="$(df -PB1 "$STATE_DIR" | awk 'NR==2 {print $4}')"
+  required=$((estimated * 2 + 1073741824))
+  ((available >= required)) || die "Not enough disk for export: need $required bytes, available $available bytes"
+  backup_job_state "$profile" running restore "Đang khôi phục snapshot vào vùng tạm"
+  restic restore "$snapshot" --target "$export_dir"
+  backup_job_state "$profile" running archive "Đang đóng gói file tải xuống"
+  tar -C "$export_dir" -czf "$archive" .
+  rm -rf "$export_dir"; chmod 0640 "$archive"
+  backup_job_state "$profile" completed export "Đã tạo gói tải xuống: $(basename "$archive")"
+  printf '%s\n' "$archive"
+}
+
+backup_export_start() {
+  require_root
+  local profile="${1:?profile}" snapshot="${2:?snapshot}" unit
+  [[ "$profile" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "Invalid profile"
+  [[ "$snapshot" =~ ^[A-Fa-f0-9]{6,64}$ || "$snapshot" == latest ]] || die "Invalid snapshot"
+  unit="leodigi-cpt-export-${profile}-${snapshot:0:12}"
+  systemctl is-active --quiet "$unit.service" && die "Export is already running"
+  systemd-run --unit="$unit" --collect --no-block /usr/local/sbin/toolkitctl backup export "$profile" "$snapshot"
+  info "Snapshot export queued: profile=$profile snapshot=$snapshot"
+}
 
 backup_schedule() {
   require_root

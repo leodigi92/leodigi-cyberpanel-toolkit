@@ -352,6 +352,21 @@ Dashboard từ phiên bản 1.4 cho phép chọn phạm vi backup theo đúng we
 
 Với chế độ chọn riêng, phải chọn ít nhất một website. Website tĩnh có thể không cần database; website động cần kiểm tra database được tự chọn đúng trước khi lưu lịch.
 
+### Backup Monitor, snapshot và tải bản khôi phục (v1.5)
+
+Nút **Chạy backup nền** trả kết quả ngay và giao tác vụ cho systemd. Khu vực **Backup Monitor** tự cập nhật mỗi 2 giây, hiển thị giai đoạn dump database/upload/retention, phần trăm, dung lượng, tốc độ trung bình, thời gian còn lại và file đang xử lý.
+
+```bash
+sudo toolkitctl backup start production
+sudo toolkitctl backup status production
+sudo toolkitctl backup cancel production
+sudo toolkitctl backup snapshots-json production
+```
+
+Trong Dashboard, bấm **Tải danh sách snapshot**, chọn snapshot rồi bấm **Tạo gói tải xuống**. Toolkit khôi phục snapshot vào vùng tạm, đóng gói `.tar.gz` trong `/var/lib/leodigi-cyberpanel-toolkit/exports` và chỉ cho người đã đăng nhập Dashboard tải xuống. Gói khôi phục không tự ghi đè website/database đang chạy.
+
+Gói snapshot có thể rất lớn và tạm thời cần thêm dung lượng ổ đĩa. Sau khi tải xong, quản trị viên nên xóa gói không còn cần thiết khỏi thư mục `exports`.
+
 ### Bước 4: Chạy backup đầu tiên
 
 ```bash

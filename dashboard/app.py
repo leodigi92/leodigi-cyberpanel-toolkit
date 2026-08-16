@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -88,6 +88,10 @@ color:#637995;text-align:center;margin-top:28px;font-size:12px}
 min-width:360px}.checkrow{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:7px;
 border-bottom:1px solid #172a44}.checkrow input{min-width:auto}.checkrow small{color:var(--muted)}.scope{display:flex;gap:16px;
 padding:9px 0}.scope label{color:var(--text);font-size:13px}.scope input{min-width:auto}
+.progress{height:14px;background:#07101f;border:1px solid #294463;border-radius:20px;overflow:hidden;margin:12px 0}
+.progress span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--brand),var(--blue));transition:width .4s}
+.monitor-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.monitor-item{background:#081426;border:1px solid #203856;
+border-radius:9px;padding:11px}.monitor-item small{display:block;color:var(--muted);margin-bottom:5px}.monitor-item b{font-size:15px}
 @media(max-width:1000px){.layout{display:block}.sidebar{position:static;width:auto}.nav{display:flex;overflow:auto}
 .nav a{white-space:nowrap}.side-foot{display:none}.main{padding:20px}.span3,.span4{grid-column:span 6}}
 @media(max-width:650px){.span3,.span4,.span6,.span8{grid-column:span 12}.status-list,.quick{grid-template-columns:1fr}}
@@ -343,9 +347,9 @@ def backup_body(request: Request) -> str:
     select = f'<div><label>Backup profile</label><select name="profile">{options}</select></div>'
     actions = '<div class="empty">Chưa có profile. Hãy dùng biểu mẫu cấu hình phía trên.</div>'
     if available:
-        actions = (action_form(request, "backup-list", "Xem snapshots", select) +
-                   action_form(request, "backup-check", "Kiểm tra repository", select) +
-                   action_form(request, "backup-run", "Chạy backup ngay", select, "good"))
+        actions = (action_form(request, "backup-check", "Kiểm tra repository", select) +
+                   action_form(request, "backup-run", "Chạy backup nền", select, "good") +
+                   action_form(request, "backup-cancel", "Dừng backup", select, "danger"))
     remote_list = remotes()
     rows = "".join(f"<tr><td>{html.escape(r)}</td><td><span class='badge ok'>connected</span></td></tr>" for r in remote_list)
     remote_options = "".join(f'<option value="{html.escape(r)}">{html.escape(r)}</option>' for r in remote_list)
@@ -367,6 +371,12 @@ def backup_body(request: Request) -> str:
                            f'<td>{html.escape(x["selection"])}</td><td>{html.escape(x["retention"])} ngày</td>'
                            f'<td><span class="badge ok">Đã cấu hình</span></td></tr>'
                            for x in profile_details())
+    monitor_options = "".join(f'<option value="{html.escape(p)}">{html.escape(p)}</option>' for p in available)
+    export_dir = STATE_DIR / "exports"
+    export_links = "".join(
+        f'<a class="btn" href="/download/{html.escape(p.name)}">{html.escape(p.name)} · {human_bytes(p.stat().st_size)}</a>'
+        for p in sorted(export_dir.glob("*.tar.gz"), key=lambda x: x.stat().st_mtime, reverse=True)[:20]
+        if p.is_file()) if export_dir.is_dir() else ""
     configure = f"""<form method="post" action="/action/backup-configure" id="backup-config">
 <input type="hidden" name="csrf_token" value="{csrf(request)}"><div class="forms">
 <div><label>Tên cấu hình</label><input name="profile" value="production" required></div>
@@ -403,6 +413,37 @@ document.getElementById('all-sites').addEventListener('change',e=>siteBoxes.forE
 document.getElementById('all-databases').addEventListener('change',e=>dbBoxes.forEach(x=>x.checked=e.target.checked));
 siteBoxes.forEach(x=>x.addEventListener('change',()=>{{if(x.checked&&x.dataset.db){{const db=dbBoxes.find(d=>d.dataset.dbName===x.dataset.db);if(db)db.checked=true}}}}));
 </script>"""
+    monitor = f"""<section class="card span12"><h2>Backup Monitor</h2>
+<div class="forms"><div><label>Profile đang theo dõi</label><select id="monitor-profile">{monitor_options}</select></div>
+<button type="button" id="load-snapshots">Tải danh sách snapshot</button></div>
+<div class="progress"><span id="backup-progress"></span></div>
+<div class="monitor-grid"><div class="monitor-item"><small>Trạng thái</small><b id="job-status">Chưa chạy</b></div>
+<div class="monitor-item"><small>Giai đoạn</small><b id="job-phase">-</b></div>
+<div class="monitor-item"><small>Tiến độ</small><b id="job-percent">0%</b></div>
+<div class="monitor-item"><small>Dữ liệu</small><b id="job-bytes">0 B / 0 B</b></div>
+<div class="monitor-item"><small>Tốc độ trung bình</small><b id="job-speed">0 B/s</b></div>
+<div class="monitor-item"><small>Còn lại dự kiến</small><b id="job-eta">-</b></div></div>
+<p class="subtitle" id="job-message">Dashboard tự cập nhật mỗi 2 giây.</p>
+<h2>Snapshots & khôi phục</h2><div id="snapshot-area" class="empty">Bấm “Tải danh sách snapshot”.</div>
+<h2 style="margin-top:18px">Gói tải xuống đã tạo</h2><div class="forms">{export_links or '<span class="subtitle">Chưa có gói tải xuống.</span>'}</div>
+</section><script>
+const mp=document.getElementById('monitor-profile'),bar=document.getElementById('backup-progress');
+function bytes(n){{n=Number(n||0);const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){{n/=1024;i++}}return n.toFixed(i?1:0)+' '+u[i]}}
+function esc(v){{return String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]))}}
+async function pollJob(){{if(!mp||!mp.value)return;try{{const r=await fetch('/api/backup-status?profile='+encodeURIComponent(mp.value));
+ const d=await r.json(),p=d.progress||{{}},pct=Math.max(0,Math.min(100,Number(p.percent_done||0)*100));
+ document.getElementById('job-status').textContent=d.status||'idle';document.getElementById('job-phase').textContent=d.phase||'-';
+ document.getElementById('job-percent').textContent=pct.toFixed(1)+'%';bar.style.width=pct+'%';
+ document.getElementById('job-bytes').textContent=bytes(p.bytes_done)+' / '+bytes(p.total_bytes);
+ document.getElementById('job-speed').textContent=bytes(Number(p.bytes_done||0)/Math.max(1,Number(p.seconds_elapsed||0)))+'/s';
+ document.getElementById('job-eta').textContent=p.seconds_remaining?Math.ceil(p.seconds_remaining/60)+' phút':'-';
+ document.getElementById('job-message').textContent=(d.message||p.message_type||'')+(p.current_files&&p.current_files.length?' · Đang xử lý: '+p.current_files.join(', '):'');}}catch(e){{document.getElementById('job-message').textContent='Không đọc được trạng thái: '+e}}}}
+async function snapshots(){{const area=document.getElementById('snapshot-area');area.textContent='Đang tải...';
+ const r=await fetch('/api/backup-snapshots?profile='+encodeURIComponent(mp.value)),d=await r.json();if(!r.ok){{area.textContent=d.detail||'Lỗi';return}}
+ if(!d.snapshots.length){{area.textContent='Chưa có snapshot hoàn chỉnh.';return}}let h='<table class="table"><thead><tr><th>ID</th><th>Thời gian</th><th>Host</th><th>Paths</th><th>Khôi phục/Tải</th></tr></thead><tbody>';
+ for(const s of d.snapshots){{const id=s.short_id||s.id;h+='<tr><td><code>'+esc(id)+'</code></td><td>'+esc(s.time)+'</td><td>'+esc(s.hostname||'')+'</td><td>'+esc((s.paths||[]).join(', '))+'</td><td><form method="post" action="/action/backup-export"><input type="hidden" name="csrf_token" value="{csrf(request)}"><input type="hidden" name="profile" value="'+esc(mp.value)+'"><input type="hidden" name="snapshot" value="'+esc(id)+'"><button>Tạo gói tải xuống</button></form></td></tr>'}}area.innerHTML=h+'</tbody></table>'}}
+document.getElementById('load-snapshots').addEventListener('click',snapshots);mp&&mp.addEventListener('change',pollJob);setInterval(pollJob,2000);pollJob();
+</script>"""
     return f"""<div class="grid"><section class="card span12"><h2>Cấu hình Google Drive Backup & Schedule</h2>
 <div class="notice">Chọn remote, chọn trực tiếp thư mục trên Drive, số ngày lưu và lịch chạy. Toolkit sẽ tạo Restic profile mã hóa.</div>
 {configure}</section><section class="card span8"><h2>Backup profiles</h2>
@@ -411,7 +452,7 @@ siteBoxes.forEach(x=>x.addEventListener('change',()=>{{if(x.checked&&x.dataset.d
 <tbody>{profile_rows or '<tr><td colspan="5">Chưa có profile</td></tr>'}</tbody></table><div class="forms">{actions}</div>
 </section><section class="card span4"><h2>Cloud remotes</h2><table class="table"><thead><tr><th>Remote</th>
 <th>Trạng thái</th></tr></thead><tbody>{rows or '<tr><td colspan="2">Chưa có remote</td></tr>'}</tbody></table>
-</section><section class="card span12"><h2>Lịch backup đang hoạt động</h2><table class="table"><thead>
+</section>{monitor}<section class="card span12"><h2>Lịch backup đang hoạt động</h2><table class="table"><thead>
 <tr><th>Profile</th><th>Lịch systemd</th><th>Trạng thái</th><th>Thao tác</th><th>Lần chạy kế tiếp</th></tr></thead><tbody>
 {schedule_rows or '<tr><td colspan="5">Chưa có lịch</td></tr>'}</tbody></table></section></div>"""
 
@@ -517,7 +558,7 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
                profile: str = Form(""), target: str = Form(""), remote: str = Form(""),
                path: str = Form(""), retention: str = Form("30"), frequency: str = Form("daily"),
                at: str = Form("02:30"), run_now: str = Form("no"), scope: str = Form("all"),
-               site_roots: list[str] = Form([]), databases: list[str] = Form([])):
+               site_roots: list[str] = Form([]), databases: list[str] = Form([]), snapshot: str = Form("")):
     require_auth(request)
     verify_csrf(request, csrf_token)
     timeout = 180
@@ -548,18 +589,24 @@ def run_action(request: Request, action: str, csrf_token: str = Form(...),
             code, text = command(cmd_args, cmd_timeout); outputs.append(text)
             if code: rc = code; break
         if rc == 0 and run_now == "yes":
-            rc, text = command(["backup", "run", profile], 3600); outputs.append(text)
+            rc, text = command(["backup", "start", profile], 60); outputs.append(text)
         args, output = ["backup", "configure-noninteractive", profile], "\n\n".join(outputs)
     elif action == "backup-unschedule":
         profile = valid_name(profile, "profile")
         args = ["backup", "unschedule", profile]
     elif action in READ_ACTIONS:
         args = READ_ACTIONS[action]
-    elif action in {"backup-list", "backup-check", "backup-run"}:
+    elif action in {"backup-list", "backup-check", "backup-run", "backup-cancel"}:
         profile = valid_name(profile, "profile")
         verb = action.removeprefix("backup-")
+        verb = {"run": "start", "cancel": "cancel"}.get(verb, verb)
         args = ["backup", verb, profile]
-        timeout = 1800 if verb in {"run", "check"} else 180
+        timeout = 1800 if verb == "check" else 180
+    elif action == "backup-export":
+        profile = valid_name(profile, "profile")
+        if not re.fullmatch(r"(?:[A-Fa-f0-9]{6,64}|latest)", snapshot):
+            raise HTTPException(400, "Invalid snapshot")
+        args = ["backup", "export-start", profile, snapshot]
     elif action == "wp-health":
         args = ["wp", "health", valid_name(target, "domain")]
     elif action == "malware-scan":
@@ -611,6 +658,42 @@ def api_remote_dirs(request: Request, remote: str, path: str = ""):
         raise HTTPException(502, output)
     return JSONResponse({"remote": remote, "path": path,
                          "folders": [line.strip() for line in output.splitlines() if line.strip()]})
+
+
+@app.get("/api/backup-status")
+def api_backup_status(request: Request, profile: str):
+    require_auth(request); profile = valid_name(profile, "profile")
+    rc, output = command(["backup", "status", profile], 15)
+    if rc:
+        raise HTTPException(502, output)
+    try:
+        return JSONResponse(json.loads(output))
+    except ValueError:
+        raise HTTPException(502, "Invalid backup status")
+
+
+@app.get("/api/backup-snapshots")
+def api_backup_snapshots(request: Request, profile: str):
+    require_auth(request); profile = valid_name(profile, "profile")
+    rc, output = command(["backup", "snapshots-json", profile], 120)
+    if rc:
+        raise HTTPException(502, output)
+    try:
+        data = json.loads(output)
+        return JSONResponse({"profile": profile, "snapshots": data if isinstance(data, list) else []})
+    except ValueError:
+        raise HTTPException(502, "Invalid snapshot response")
+
+
+@app.get("/download/{filename}")
+def download_export(request: Request, filename: str):
+    require_auth(request)
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,180}\.tar\.gz", filename):
+        raise HTTPException(404)
+    target = STATE_DIR / "exports" / filename
+    if not target.is_file() or target.is_symlink():
+        raise HTTPException(404)
+    return FileResponse(target, filename=filename, media_type="application/gzip")
 
 
 @app.post("/logout")

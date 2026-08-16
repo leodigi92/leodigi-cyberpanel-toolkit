@@ -141,6 +141,8 @@ Database dumps are restored as files and are never automatically imported over a
 
 Since v1.4 the Dashboard supports full-server or per-site backup scopes. It inventories CyberPanel document roots, suggests WordPress databases from `wp-config.php`, allows explicit database selection, and stores website files, compressed SQL dumps, configuration and a selection manifest in the encrypted Restic snapshot before Rclone uploads it.
 
+Version 1.5 adds background systemd jobs, a polling Backup Monitor with Restic JSON progress, safe cancellation, snapshot browsing, server-side restore/export and authenticated `.tar.gz` downloads. Exports are restored to an isolated state directory and never overwrite a live website or database.
+
 ## WordPress
 
 Create both source and destination websites/database assignments in CyberPanel first:
