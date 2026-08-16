@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail=0
-required=(README.md README.vi.md LICENSE VERSION install.sh uninstall.sh update.sh toolkitctl lib/common.sh lib/core.sh lib/backup.sh lib/wordpress.sh lib/security.sh lib/mail.sh lib/ssl.sh lib/monitoring.sh lib/dashboard.sh dashboard/app.py)
+required=(README.md README.vi.md LICENSE VERSION install.sh uninstall.sh update.sh toolkitctl bin/dashboard-server lib/common.sh lib/core.sh lib/backup.sh lib/wordpress.sh lib/security.sh lib/mail.sh lib/ssl.sh lib/monitoring.sh lib/dashboard.sh dashboard/app.py)
 for file in "${required[@]}"; do [[ -s "$ROOT/$file" ]] || { echo "MISSING $file"; fail=1; }; done
 while IFS= read -r file; do bash -n "$file" || fail=1; done < <(find "$ROOT" -type f -name '*.sh' -o -name toolkitctl)
 python3 -m py_compile "$ROOT/dashboard/app.py"
